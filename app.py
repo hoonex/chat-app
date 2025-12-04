@@ -349,7 +349,6 @@ else:
             # --- [기능] 사이드바 색상 변경 (메시지 보낼때 이 색이 박제됨) ---
             st.divider()
             st.subheader("🎨 프로필 색상")
-            st.caption("메시지에 표시될 색을 고르세요.")
             
             # 현재 세션 스테이트의 색상을 기본값으로 사용
             chosen_color = st.color_picker("색상 선택", st.session_state.user_color)
