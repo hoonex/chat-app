@@ -24,6 +24,8 @@ def hash_password(password):
 def get_custom_avatar(user_id, specific_color=None):
     if user_id == "ADMIN_ACCOUNT":
         return "📢"
+    if user_id == "SYSTEM_ENTRY": # 시스템 입장 메시지는 아바타 없음
+        return ""
     
     if specific_color:
         color_hex = specific_color.replace("#", "")
@@ -90,7 +92,6 @@ if "logged_in" not in st.session_state: st.session_state.logged_in = False
 if "user_id" not in st.session_state: st.session_state.user_id = ""
 if "user_nickname" not in st.session_state: st.session_state.user_nickname = ""
 if "is_super_admin" not in st.session_state: st.session_state.is_super_admin = False
-# [색상] 세션 초기화
 if "user_color" not in st.session_state: st.session_state.user_color = "#000000"
 
 
@@ -115,6 +116,17 @@ if not st.session_state.logged_in:
                         st.session_state.user_id = "ADMIN_ACCOUNT"
                         st.session_state.user_nickname = "관리자"
                         st.session_state.is_super_admin = True
+                        
+                        # [추가] 관리자 입장 메시지
+                        chat_ref.add({
+                            "user_id": "SYSTEM_ENTRY",
+                            "name": "SYSTEM",
+                            "message": "📢 관리자가 입장했습니다.",
+                            "timestamp": firestore.SERVER_TIMESTAMP,
+                            "is_deleted": False,
+                            "color": "#FF0000"
+                        })
+                        
                         st.success("관리자 모드로 접속합니다.")
                         time.sleep(0.5)
                         st.rerun()
@@ -122,14 +134,26 @@ if not st.session_state.logged_in:
                 else:
                     doc = users_ref.document(login_id).get()
                     if doc.exists and doc.to_dict()['password'] == hash_password(login_pw):
-                        # 로그인 시간만 업데이트 (시간 제한 로직 삭제됨)
                         users_ref.document(login_id).update({
                             "last_login": firestore.SERVER_TIMESTAMP
                         })
                         st.session_state.logged_in = True
                         st.session_state.user_id = login_id
-                        st.session_state.user_nickname = doc.to_dict()['nickname']
+                        user_nick = doc.to_dict()['nickname']
+                        st.session_state.user_nickname = user_nick
                         st.session_state.is_super_admin = False
+                        
+                        # [추가] 일반 유저 입장 메시지
+                        chat_ref.add({
+                            "user_id": "SYSTEM_ENTRY",
+                            "name": "SYSTEM",
+                            "message": f"👋 {user_nick}님이 입장했습니다.",
+                            "timestamp": firestore.SERVER_TIMESTAMP,
+                            "is_deleted": False,
+                            "color": "#808080"
+                        })
+                        maintain_chat_history()
+
                         st.rerun()
                     else: st.error("정보가 틀립니다.")
 
@@ -150,6 +174,18 @@ if not st.session_state.logged_in:
             st.session_state.user_id = guest_id
             st.session_state.user_nickname = guest_nick
             st.session_state.is_super_admin = False
+            
+            # [추가] 익명 유저 입장 메시지
+            chat_ref.add({
+                "user_id": "SYSTEM_ENTRY",
+                "name": "SYSTEM",
+                "message": f"👋 {guest_nick}님이 입장했습니다.",
+                "timestamp": firestore.SERVER_TIMESTAMP,
+                "is_deleted": False,
+                "color": "#808080"
+            })
+            maintain_chat_history()
+
             st.success(f"'{guest_nick}'으로 입장합니다.")
             time.sleep(0.5)
             st.rerun()
@@ -180,9 +216,6 @@ else:
     sys_config = get_system_config()
     is_chat_locked = sys_config.get("is_locked", False)
     banned_words = sys_config.get("banned_words", "")
-
-    # [수정] 시간 체크 로직(check_time_limit) 완전히 삭제함.
-    # 이제 무조건 이용 가능합니다.
 
     # ----------------------------------------------------
     # [B-1] 관리자 전용 화면
@@ -253,26 +286,32 @@ else:
             for doc in docs:
                 data = doc.to_dict()
                 doc_id = doc.id
+                msg_id = data.get("user_id")
                 name = data.get("name")
                 msg = data.get("message")
                 is_deleted = data.get("is_deleted", False)
                 time_str = format_time_kst(data.get("timestamp"))
-                # [색상] 관리자 화면에서도 보존된 색상 확인
                 msg_color = data.get("color", "#000000")
 
                 with st.container(border=True):
-                    mc1, mc2 = st.columns([8, 2])
-                    with mc1:
-                        if is_deleted: st.caption(f"🚫 [삭제됨] {name}: {msg}")
-                        else: 
-                            # 색상 적용
-                            st.markdown(f"<span style='color:{msg_color}; font-weight:bold;'>{name}</span>: {msg}", unsafe_allow_html=True)
-                            st.caption(time_str)
-                    with mc2:
-                        if not is_deleted:
-                            if st.button("삭제", key=f"adm_del_{doc_id}", type="primary"):
-                                chat_ref.document(doc_id).update({"is_deleted": True})
-                                st.rerun()
+                    # 입장 메시지인 경우 다르게 표시
+                    if msg_id == "SYSTEM_ENTRY":
+                        st.caption(f"🔔 {msg} ({time_str})")
+                        if st.button("알림삭제", key=f"adm_del_{doc_id}", type="primary"):
+                             chat_ref.document(doc_id).delete() # 알림은 그냥 삭제
+                             st.rerun()
+                    else:
+                        mc1, mc2 = st.columns([8, 2])
+                        with mc1:
+                            if is_deleted: st.caption(f"🚫 [삭제됨] {name}: {msg}")
+                            else: 
+                                st.markdown(f"<span style='color:{msg_color}; font-weight:bold;'>{name}</span>: {msg}", unsafe_allow_html=True)
+                                st.caption(time_str)
+                        with mc2:
+                            if not is_deleted:
+                                if st.button("삭제", key=f"adm_del_{doc_id}", type="primary"):
+                                    chat_ref.document(doc_id).update({"is_deleted": True})
+                                    st.rerun()
             st.divider()
             notice_msg = st.text_input("공지 내용")
             if st.button("공지 전송"):
@@ -309,9 +348,6 @@ else:
     # [B-2] 일반 사용자 화면
     # ----------------------------------------------------
     else:
-        # [수정] 여기에 있던 "if not is_allowed: ..." 블록을 완전히 삭제했습니다.
-        # 이제 시간 초과 검사를 하지 않습니다.
-
         components.html("""
             <script>
                 function fixButtonPosition() {
@@ -346,15 +382,24 @@ else:
         with st.sidebar:
             st.header(f"👤 {st.session_state.user_nickname}님")
             
-            # --- [기능] 사이드바 색상 변경 (메시지 보낼때 이 색이 박제됨) ---
+            # --- [수정된 기능] 사이드바 색상 변경 시 모든 과거 기록도 변경 ---
             st.divider()
             st.subheader("🎨 프로필 색상")
             
-            # 현재 세션 스테이트의 색상을 기본값으로 사용
             chosen_color = st.color_picker("색상 선택", st.session_state.user_color)
             
             if chosen_color != st.session_state.user_color:
+                # 1. 세션 색상 변경
                 st.session_state.user_color = chosen_color
+                
+                # 2. Firestore에서 내 아이디로 쓴 모든 글 찾아서 색상 업데이트
+                # (주의: 채팅이 엄청 많으면 느릴 수 있으나 MAX_CHAT_MESSAGES=50이라 괜찮음)
+                my_docs = chat_ref.where("user_id", "==", st.session_state.user_id).stream()
+                for doc in my_docs:
+                    doc.reference.update({"color": chosen_color})
+                
+                st.toast("🎨 모든 채팅 기록의 색상이 변경되었습니다!")
+                time.sleep(0.5)
                 st.rerun()
                 
             st.divider()
@@ -398,10 +443,19 @@ else:
             msg_text = data.get("message")
             msg_time = format_time_kst(data.get("timestamp"))
             is_deleted = data.get("is_deleted", False)
-            
-            # --- [기능] 저장된 메시지 색상 불러오기 ---
             msg_color = data.get("color", "#000000")
             
+            # --- [입장 메시지 처리] ---
+            if msg_id == "SYSTEM_ENTRY":
+                # 시스템 입장 메시지는 가운데 정렬된 회색 텍스트로 표시
+                st.markdown(f"""
+                <div style='text-align:center; color:#888; font-size:0.8em; margin: 10px 0;'>
+                    {msg_text} ({msg_time})
+                </div>
+                """, unsafe_allow_html=True)
+                continue # 아래 채팅 말풍선 로직 건너뜀
+            # --------------------------
+
             if is_deleted:
                 if msg_id == "ADMIN_ACCOUNT":
                     display_text = "🚫 관리자에 의해 삭제된 공지입니다."
@@ -431,7 +485,6 @@ else:
                                 st.rerun()
 
             else:
-                # [색상] 상대방 메시지 표시할 때 저장된 색상 적용
                 with st.chat_message(msg_name, avatar=get_custom_avatar(msg_id, msg_color)):
                     if not is_deleted: 
                         st.markdown(f"<span style='color:{msg_color}; font-weight:bold;'>{msg_name}</span>", unsafe_allow_html=True)
@@ -442,7 +495,6 @@ else:
         if prompt := st.chat_input("메시지 입력...", disabled=is_chat_locked):
             filtered_msg = filter_message(prompt, banned_words)
             
-            # --- [기능] 메시지 저장 시 현재 내 색상(user_color)을 같이 저장 ---
             chat_ref.add({
                 "user_id": st.session_state.user_id,
                 "name": st.session_state.user_nickname,
