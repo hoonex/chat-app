@@ -199,7 +199,19 @@ else:
                         st.rerun()
 
         with admin_tab3:
-            st.subheader("실시간 모니터링")
+            st.subheader("실시간 모니터링 & 삭제")
+            
+            # [복구된 기능] 채팅 전체 삭제 버튼
+            if st.button("🗑️ 채팅방 기록 전체 삭제 (초기화)", type="primary"):
+                docs = chat_ref.stream()
+                for doc in docs:
+                    doc.reference.delete()
+                st.success("모든 채팅 기록을 삭제했습니다.")
+                time.sleep(1)
+                st.rerun()
+            
+            st.divider()
+
             docs = chat_ref.order_by("timestamp", direction=firestore.Query.DESCENDING).stream()
             for doc in docs:
                 data = doc.to_dict()
@@ -207,17 +219,21 @@ else:
                 name = data.get("name")
                 msg = data.get("message")
                 is_deleted = data.get("is_deleted", False)
+                time_str = format_time_kst(data.get("timestamp"))
+
                 with st.container(border=True):
                     mc1, mc2 = st.columns([8, 2])
                     with mc1:
-                        if is_deleted: st.caption(f"🚫 {msg} (ID: {name})")
-                        else: st.write(f"**{name}**: {msg}")
+                        if is_deleted:
+                            st.caption(f"🚫 [삭제됨] {name}님이 삭제한 글")
+                        else:
+                            st.write(f"**{name}**: {msg}")
+                            st.caption(f"{time_str}")
                     with mc2:
                         if not is_deleted:
                             if st.button("삭제", key=f"adm_del_{doc_id}", type="primary"):
                                 chat_ref.document(doc_id).update({
-                                    "message": "🚫 관리자에 의해 삭제된 글입니다.",
-                                    "is_deleted": True
+                                    "is_deleted": True # 관리자가 삭제하면 내용과 관계없이 플래그만 변경
                                 })
                                 st.rerun()
             st.divider()
@@ -238,37 +254,32 @@ else:
     # [B-2] 일반 사용자 화면
     # ----------------------------------------------------
     else:
-        # [수정] 버튼 위치를 오른쪽 상단으로 변경 & 크기 고정
+        # 버튼 고정 (우측 상단, 작게)
         components.html("""
             <script>
                 function fixButtonPosition() {
                     const buttons = window.parent.document.querySelectorAll('button');
                     buttons.forEach(btn => {
                         if (btn.innerText.includes('🔄 채팅 새로고침')) {
-                            // 1. 강제 고정
                             btn.style.position = 'fixed';
-                            
-                            // 2. 위치: 오른쪽 위 (헤더 바로 아래)
                             btn.style.top = '70px'; 
                             btn.style.right = '20px';
-                            btn.style.bottom = 'auto'; // 하단 위치 해제
-                            btn.style.left = 'auto';   // 왼쪽 위치 해제
+                            btn.style.bottom = 'auto'; 
+                            btn.style.left = 'auto';   
                             
-                            // 3. 스타일: 작고 예쁘게
-                            btn.style.width = 'auto';  // [중요] 길게 늘어나는 것 방지!
-                            btn.style.minWidth = '0px'; // 최소 너비 해제
+                            btn.style.width = 'auto'; 
+                            btn.style.minWidth = '0px';
                             btn.style.zIndex = '999999';
                             btn.style.backgroundColor = 'white';
                             btn.style.color = '#FF4B4B';
                             btn.style.border = '1px solid #FF4B4B';
                             btn.style.borderRadius = '15px';
                             btn.style.fontWeight = 'bold';
-                            btn.style.padding = '5px 12px'; // 안쪽 여백 줄임 (버튼 작게)
+                            btn.style.padding = '5px 12px';
                             btn.style.boxShadow = '0 2px 5px rgba(0,0,0,0.1)';
                         }
                     });
                 }
-                // 지속적으로 위치 고정
                 setInterval(fixButtonPosition, 500);
             </script>
         """, height=0, width=0)
@@ -285,7 +296,9 @@ else:
                     if change_nick != st.session_state.user_nickname:
                         clean_nick = change_nick.strip()
                         if clean_nick:
+                            # 1. 내 정보 업데이트
                             users_ref.document(st.session_state.user_id).update({"nickname": clean_nick})
+                            # 2. 내 모든 글의 작성자 이름 업데이트
                             my_msgs = chat_ref.where("user_id", "==", st.session_state.user_id).stream()
                             for msg in my_msgs: msg.reference.update({"name": clean_nick})
                             st.session_state.user_nickname = clean_nick
@@ -307,31 +320,47 @@ else:
             data = doc.to_dict()
             doc_id = doc.id
             msg_id = data.get("user_id")
-            msg_name = data.get("name")
+            msg_name = data.get("name") # 여기서 가져오는 name은 닉네임 변경 시 업데이트된 최신 이름임
             msg_text = data.get("message")
             msg_time = format_time_kst(data.get("timestamp"))
             is_deleted = data.get("is_deleted", False)
             
+            # [핵심 로직] 삭제된 메시지 표시 방법 변경
+            # DB에 저장된 텍스트를 무시하고, 화면 그릴 때 실시간으로 이름을 조합함
+            if is_deleted:
+                # 관리자가 아닌 경우엔 'OOO님이 삭제한 글입니다'로 표시
+                if msg_id == "ADMIN_ACCOUNT":
+                    display_text = "🚫 관리자에 의해 삭제된 공지입니다."
+                elif msg_text == "🚫 관리자에 의해 삭제된 글입니다.": # 관리자가 지운 경우
+                    display_text = "🚫 관리자에 의해 삭제된 글입니다."
+                else:
+                    # [여기] msg_name은 최신 닉네임이 반영되어 있음
+                    display_text = f"🗑️ {msg_name}님이 삭제한 글입니다."
+                
+                text_html = f"""<div style='color:#888;font-style:italic;'>{display_text}</div>
+                                <div style='display:block;text-align:right;font-size:0.7em;color:grey;'>{msg_time}</div>"""
+            else:
+                text_html = f"""{msg_text}<div style='display:block;text-align:right;font-size:0.7em;color:grey;'>{msg_time}</div>"""
+            
             # 1. 관리자 공지
             if msg_id == "ADMIN_ACCOUNT":
                 with st.chat_message("admin", avatar="📢"):
-                    st.error(f"**[공지] {msg_text}**") 
+                    if is_deleted:
+                        st.markdown(text_html, unsafe_allow_html=True)
+                    else:
+                        st.error(f"**[공지] {msg_text}**") 
             
             # 2. 내 메시지
             elif msg_id == st.session_state.user_id:
                 with st.chat_message("user"):
                     col_msg, col_del = st.columns([9, 1])
                     with col_msg:
-                        if is_deleted:
-                            st.markdown(f"<div style='color:#999; font-style:italic;'>{msg_text}</div>", unsafe_allow_html=True)
-                        else:
-                            st.markdown(f"{msg_text}")
-                        st.caption(f"{msg_time}")
+                        st.markdown(text_html, unsafe_allow_html=True)
                     with col_del:
                         if not is_deleted:
                             if st.button("🗑️", key=f"my_del_{doc_id}", help="이 글 삭제"):
+                                # [핵심] 삭제할 때 메시지 내용을 굳이 바꾸지 않아도 됨 (is_deleted만 True로)
                                 chat_ref.document(doc_id).update({
-                                    "message": f"🗑️ {st.session_state.user_nickname}님이 삭제한 글입니다.",
                                     "is_deleted": True
                                 })
                                 st.rerun()
@@ -339,12 +368,9 @@ else:
             # 3. 남 메시지
             else:
                 with st.chat_message(msg_name, avatar=get_custom_avatar(msg_id)):
-                    if is_deleted:
-                        st.markdown(f"<div style='color:#999; font-style:italic;'>{msg_text}</div>", unsafe_allow_html=True)
-                    else:
+                    if not is_deleted:
                         st.markdown(f"**{msg_name}**")
-                        st.markdown(f"{msg_text}")
-                    st.caption(f"{msg_time}")
+                    st.markdown(text_html, unsafe_allow_html=True)
 
         if not chat_exists: st.info("대화가 없습니다.")
             
