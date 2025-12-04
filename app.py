@@ -135,7 +135,7 @@ if not st.session_state.logged_in:
 # ==========================================
 else:
     # ----------------------------------------------------
-    # [B-1] 관리자 전용 화면 (노란 배경)
+    # [B-1] 관리자 전용 화면
     # ----------------------------------------------------
     if st.session_state.is_super_admin:
         st.markdown("""
@@ -177,7 +177,6 @@ else:
                     u_data = user.to_dict()
                     u_id = user.id
                     u_nick = u_data.get("nickname", "-")
-                    
                     cc1, cc2, cc3, cc4, cc5 = st.columns([1.5, 1.5, 2, 1.5, 1])
                     cc1.text(u_id)
                     cc2.text(u_nick)
@@ -239,34 +238,36 @@ else:
     # ----------------------------------------------------
     else:
         # [핵심] 새로고침 버튼 고정 (Floating Button)
-        # CSS를 주입하여 버튼 위치를 오른쪽 상단에 고정시킵니다.
+        # CSS 선택자를 더 강력하게 수정했습니다. ( > 대신 띄어쓰기 사용 + !important)
         st.markdown("""
             <style>
-            /* 특정 div 다음에 오는 버튼을 타겟팅하기 위한 마커 */
+            /* 이 마커(div) 바로 다음에 오는 div 안의 버튼을 타겟팅합니다 */
             .fixed-refresh-btn-marker {
                 display: none;
             }
-            /* 마커 바로 뒤에 있는 div(버튼 컨테이너)를 고정시킴 */
-            .fixed-refresh-btn-marker + div > button {
+            /* 직계 자식(>)이 아니라 후손 선택자(띄어쓰기)를 사용하여 깊숙히 있는 버튼도 찾아냅니다 */
+            .fixed-refresh-btn-marker + div button {
                 position: fixed !important;
-                top: 3.5rem !important; /* 헤더 높이만큼 띄움 */
-                right: 1rem !important;
-                z-index: 999999 !important;
+                top: 3.5rem !important;     /* 헤더 높이만큼 아래로 */
+                right: 1rem !important;     /* 오른쪽 끝에 고정 */
+                z-index: 999999 !important; /* 제일 위에 뜨도록 */
                 background-color: white;
                 color: #FF4B4B;
                 border: 1px solid #f0f0f0;
                 box-shadow: 0px 2px 5px rgba(0,0,0,0.1);
                 font-weight: bold;
+                width: auto !important;
             }
-            .fixed-refresh-btn-marker + div > button:hover {
+            .fixed-refresh-btn-marker + div button:hover {
                 border-color: #FF4B4B;
                 color: #FF4B4B;
+                background-color: #fff0f0;
             }
             </style>
             <div class="fixed-refresh-btn-marker"></div>
             """, unsafe_allow_html=True)
             
-        # 이 버튼은 이제 CSS에 의해 오른쪽 위에 고정됩니다.
+        # 이 버튼은 위 CSS에 의해 오른쪽 위에 둥둥 떠있게 됩니다.
         if st.button("🔄 채팅 새로고침"):
             st.rerun()
 
