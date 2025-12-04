@@ -62,28 +62,29 @@ with st.sidebar:
 # --- 4. 메인 채팅 화면 ---
 st.title("정동고 익명 채팅방")
 
-# 메시지 가져오기 (시간순 정렬)
+# 메시지 가져오기
 docs = chat_ref.order_by("timestamp").stream()
 
-empty_check = True # 메시지가 하나라도 있는지 체크
+empty_check = True
 
-# 채팅 메시지 그리기
 for doc in docs:
     empty_check = False
     data = doc.to_dict()
     sender_name = data.get("name", "알 수 없음")
     message_text = data.get("message", "")
     
-    # 내가 쓴 글은 오른쪽, 남이 쓴 글은 왼쪽
+    # 1. 내가 보낸 메시지 (오른쪽)
     if sender_name == st.session_state.username:
-        with st.chat_message("user"):
+        # 내 건 그냥 'user' 아이콘(사람 모양) 쓰거나, 내 이름 넣어도 됨
+        with st.chat_message("user"): 
             st.write(message_text)
+            
+    # 2. 남이 보낸 메시지 (왼쪽)
     else:
-        with st.chat_message("assistant"):
+        with st.chat_message(sender_name): 
             st.markdown(f"**{sender_name}**")
             st.write(message_text)
 
-# 메시지가 없을 때 안내 문구
 if empty_check:
     st.info("아직 대화 내용이 없습니다. 첫 메시지를 남겨보세요!")
 
