@@ -3,8 +3,7 @@ import firebase_admin
 from firebase_admin import credentials
 from firebase_admin import firestore
 import time
-import urllib.parse
-import uuid # 👈 [추가] 고유한 주민등록번호(ID)를 만드는 도구
+import uuid # 고유 ID 생성 도구
 
 # --- 1. 페이지 기본 설정 ---
 st.set_page_config(page_title="실시간 채팅", page_icon="💬")
@@ -23,7 +22,6 @@ db = firestore.client()
 chat_ref = db.collection("global_chat")
 
 # --- 3. 사용자 고유 ID(지문) 생성 ---
-# 브라우저를 껐다 켜기 전까지 유지되는 나만의 고유번호
 if "user_id" not in st.session_state:
     st.session_state.user_id = str(uuid.uuid4())
 
@@ -31,18 +29,17 @@ if "user_id" not in st.session_state:
 with st.sidebar:
     st.header("👤 내 정보")
     
-    # 닉네임 설정
     if "user_nickname" not in st.session_state:
         st.session_state.user_nickname = "익명"
 
     st.text_input("닉네임", key="user_nickname")
     
-    # 이름 공백 제거
     MY_NAME = st.session_state.user_nickname.strip()
     if not MY_NAME:
         MY_NAME = "익명"
 
-    st.caption(f"내 고유 ID: ...{st.session_state.user_id[-6:]}") # 디버깅용(끝 6자리만 표시)
+    # 디버깅용 (내 ID 확인)
+    st.caption(f"내 고유 ID: ...{st.session_state.user_id[-6:]}") 
 
     st.divider()
     
@@ -77,19 +74,24 @@ for doc in docs:
     
     sender_name = str(data.get("name", "알 수 없음"))
     message_text = data.get("message", "")
-    sender_id = data.get("user_id", "") # 저장된 작성자의 고유 ID 꺼내기
+    sender_id = data.get("user_id", "") # 작성자의 고유 ID
     
-    # [핵심 수정] 닉네임이 아니라 '고유 ID'가 같은지 비교합니다.
-    # 이름이 "익명"으로 똑같아도, ID가 다르면 남(왼쪽)으로 뜹니다.
+    # 1. 고유 ID로 '나'와 '남'을 구분 (이름이 같아도 ID 다르면 남)
     if sender_id == st.session_state.user_id:
         # ✅ 나 (오른쪽)
         with st.chat_message("user"):
             st.write(message_text)
     else:
         # 🔴 남 (왼쪽)
-        # 이름이 같아도 남이면 왼쪽에 예쁜 아이콘으로 뜹니다.
-        safe_name = urllib.parse.quote(sender_name)
-        icon_url = f"https://api.dicebear.com/9.x/initials/svg?seed={safe_name}"
+        
+        # [핵심 수정] 아이콘을 만들 때 '이름'이 아니라 'ID'를 넣습니다!
+        # 이제 이름이 똑같은 '익명'이라도 ID가 다르면 서로 다른 얼굴이 나옵니다.
+        
+        # ID가 없으면(옛날 글) 이름 사용, 있으면 ID 사용
+        seed_value = sender_id if sender_id else sender_name
+        
+        # 스타일을 'adventurer'(캐릭터)로 변경 -> 구분이 더 확실함
+        icon_url = f"https://api.dicebear.com/9.x/adventurer/svg?seed={seed_value}"
         
         with st.chat_message(sender_name, avatar=icon_url):
             st.markdown(f"**{sender_name}**")
@@ -103,7 +105,7 @@ if prompt := st.chat_input("메시지 입력..."):
     chat_ref.add({
         "name": MY_NAME,
         "message": prompt,
-        "user_id": st.session_state.user_id, # [중요] 내 지문(ID)을 같이 찍어서 보냄
+        "user_id": st.session_state.user_id, # 내 ID 포함 전송
         "timestamp": firestore.SERVER_TIMESTAMP
     })
     st.rerun()
