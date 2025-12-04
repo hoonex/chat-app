@@ -237,38 +237,39 @@ else:
     # [B-2] 일반 사용자 화면
     # ----------------------------------------------------
     else:
-        # [핵심] 새로고침 버튼 하단 고정
-        # 화면 오른쪽 아래 (입력창 바로 위)에 고정되도록 CSS를 수정했습니다.
+        # [핵심 CSS 수정] 너비 문제 해결 + 위치 강력 고정
         st.markdown("""
             <style>
             .fixed-refresh-btn-marker {
                 display: none;
             }
-            .fixed-refresh-btn-marker + div button {
+            /* + (인접 형제) 대신 ~ (일반 형제) 선택자 사용으로 인식률 높임 */
+            .fixed-refresh-btn-marker ~ div button {
                 position: fixed !important;
-                bottom: 80px !important;    /* 바닥에서 80px 위 (채팅창 바로 위) */
-                right: 20px !important;     /* 오른쪽 벽에서 20px */
-                left: auto !important;      /* 왼쪽 붙음 방지 */
+                bottom: 100px !important;   /* 채팅창보다 약간 더 위 */
+                right: 30px !important;     /* 오른쪽 여백 */
+                left: auto !important;      /* 왼쪽 쏠림 방지 */
+                width: auto !important;     /* [중요] 버튼 길이를 글자만큼만 줄임 */
                 z-index: 999999 !important;
                 background-color: white;
                 color: #FF4B4B;
                 border: 1px solid #f0f0f0;
-                box-shadow: 0px 4px 6px rgba(0,0,0,0.1);
+                box-shadow: 0px 4px 10px rgba(0,0,0,0.2); /* 그림자 진하게 */
                 font-weight: bold;
-                border-radius: 20px;
-                padding: 0.5rem 1rem;
+                border-radius: 50px; /* 둥글게 */
+                padding: 10px 20px !important;
             }
-            .fixed-refresh-btn-marker + div button:hover {
-                border-color: #FF4B4B;
-                color: #FF4B4B;
-                background-color: #fff0f0;
+            .fixed-refresh-btn-marker ~ div button:hover {
+                background-color: #FF4B4B !important;
+                color: white !important;
+                border-color: #FF4B4B !important;
             }
             </style>
             <div class="fixed-refresh-btn-marker"></div>
             """, unsafe_allow_html=True)
             
-        # 이 버튼은 이제 오른쪽 아래(채팅창 위)에 뜹니다.
-        if st.button("🔄 채팅 새로고침"):
+        # key를 바꿔서 강제로 새로고침 효과를 줍니다.
+        if st.button("🔄 새로고침", key="refresh_fixed_btn_final"):
             st.rerun()
 
         # 사이드바
