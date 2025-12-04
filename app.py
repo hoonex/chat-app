@@ -20,7 +20,6 @@ KST = timezone(timedelta(hours=9))
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
-# [색상 기능] 아바타 생성 시 색상 반영
 def get_custom_avatar(user_id, specific_color=None):
     if user_id == "ADMIN_ACCOUNT":
         return "📢"
@@ -119,7 +118,7 @@ if not st.session_state.logged_in:
                         
                         chat_ref.add({
                             "user_id": "SYSTEM_ENTRY",
-                            "related_user_id": "ADMIN_ACCOUNT", # [추가] 누구 입장인지 추적용
+                            "related_user_id": "ADMIN_ACCOUNT", 
                             "name": "SYSTEM",
                             "message": "📢 관리자가 입장했습니다.",
                             "timestamp": firestore.SERVER_TIMESTAMP,
@@ -143,10 +142,9 @@ if not st.session_state.logged_in:
                         st.session_state.user_nickname = user_nick
                         st.session_state.is_super_admin = False
                         
-                        # [기능 2 구현부] 입장 시 ID를 숨겨둠 (나중에 닉변경시 찾기 위해)
                         chat_ref.add({
                             "user_id": "SYSTEM_ENTRY",
-                            "related_user_id": login_id, # [추가] 관련 유저 ID 저장
+                            "related_user_id": login_id,
                             "name": "SYSTEM",
                             "message": f"👋 {user_nick}님이 입장했습니다.",
                             "timestamp": firestore.SERVER_TIMESTAMP,
@@ -176,10 +174,9 @@ if not st.session_state.logged_in:
             st.session_state.user_nickname = guest_nick
             st.session_state.is_super_admin = False
             
-            # [기능 2 구현부]
             chat_ref.add({
                 "user_id": "SYSTEM_ENTRY",
-                "related_user_id": guest_id, # [추가]
+                "related_user_id": guest_id,
                 "name": "SYSTEM",
                 "message": f"👋 {guest_nick}님이 입장했습니다.",
                 "timestamp": firestore.SERVER_TIMESTAMP,
@@ -204,7 +201,6 @@ if not st.session_state.logged_in:
                 st.error("비밀번호 조건을 확인해주세요.")
             elif users_ref.document(new_id).get().exists: st.error("이미 있는 아이디입니다.")
             else:
-                # [기능 1 구현부] 회원가입 시에도 닉네임 중복 체크
                 existing_nick = users_ref.where("nickname", "==", new_nick).limit(1).get()
                 if len(existing_nick) > 0:
                     st.error("이미 사용 중인 닉네임입니다. 다른 이름을 써주세요.")
@@ -256,13 +252,16 @@ else:
             c1.metric("총 회원", f"{len(all_users)}명")
             c2.metric("총 메시지", f"{len(all_chats)}개")
 
+        # --- [수정] 관리자가 닉네임 강제 변경하는 기능 복구 ---
         with admin_tab2:
-            st.subheader("회원 목록")
+            st.subheader("회원 목록 및 닉네임 강제 변경")
             if all_users:
-                c1, c2, c3 = st.columns([2, 2, 1])
+                # 컬럼 비율 조정: ID, 현재닉, 새닉입력, 버튼들
+                c1, c2, c3, c4 = st.columns([1.5, 1.5, 2, 1.5])
                 c1.markdown("**ID**")
-                c2.markdown("**닉네임**")
-                c3.markdown("**관리**")
+                c2.markdown("**현재 닉네임**")
+                c3.markdown("**닉네임 강제변경**")
+                c4.markdown("**관리**")
                 st.divider()
                 
                 for user in all_users:
@@ -270,11 +269,33 @@ else:
                     u_id = user.id
                     u_nick = u_data.get("nickname", "-")
                     
-                    cc1, cc2, cc3 = st.columns([2, 2, 1])
+                    cc1, cc2, cc3, cc4 = st.columns([1.5, 1.5, 2, 1.5])
                     cc1.text(u_id)
                     cc2.text(u_nick)
                     
-                    if cc3.button("추방", key=f"ban_{u_id}", type="primary"):
+                    # 닉네임 강제 변경 입력창
+                    with cc3:
+                        new_admin_nick = st.text_input("new_nick", value=u_nick, key=f"adn_{u_id}", label_visibility="collapsed")
+                        if new_admin_nick != u_nick:
+                            if st.button("변경 적용", key=f"btn_adn_{u_id}"):
+                                # 1. 유저 정보 업데이트
+                                users_ref.document(u_id).update({"nickname": new_admin_nick})
+                                
+                                # 2. 해당 유저의 채팅 기록 닉네임 업데이트
+                                u_msgs = chat_ref.where("user_id", "==", u_id).stream()
+                                for m in u_msgs: m.reference.update({"name": new_admin_nick})
+                                
+                                # 3. 입장 알림 메시지도 업데이트 (관련 유저 ID로 찾아서)
+                                sys_msgs = chat_ref.where("related_user_id", "==", u_id).stream()
+                                for s in sys_msgs:
+                                    s.reference.update({"message": f"👋 {new_admin_nick}님이 입장했습니다."})
+                                    
+                                st.toast(f"{u_nick} -> {new_admin_nick} 변경 완료")
+                                time.sleep(1)
+                                st.rerun()
+
+                    # 추방 버튼
+                    if cc4.button("추방", key=f"ban_{u_id}", type="primary"):
                         users_ref.document(u_id).delete()
                         st.toast("삭제 완료")
                         time.sleep(1)
@@ -413,7 +434,7 @@ else:
                     if st.button("저장"):
                         clean_nick = change_nick.strip()
                         if clean_nick and clean_nick != st.session_state.user_nickname:
-                            # [기능 1 구현부] 중복 체크
+                            # 중복 체크
                             check_dup = users_ref.where("nickname", "==", clean_nick).limit(1).get()
                             if len(check_dup) > 0:
                                 st.error("⚠️ 이미 존재하는 닉네임입니다.")
@@ -425,8 +446,7 @@ else:
                                 my_msgs = chat_ref.where("user_id", "==", st.session_state.user_id).stream()
                                 for msg in my_msgs: msg.reference.update({"name": clean_nick})
                                 
-                                # 3. [기능 2 구현부] "입장했습니다" 시스템 메시지도 찾아서 업데이트
-                                # related_user_id가 나인 시스템 메시지를 찾음
+                                # 3. "입장했습니다" 시스템 메시지도 찾아서 업데이트
                                 sys_msgs = chat_ref.where("user_id", "==", "SYSTEM_ENTRY")\
                                                    .where("related_user_id", "==", st.session_state.user_id)\
                                                    .stream()
@@ -463,7 +483,6 @@ else:
             is_deleted = data.get("is_deleted", False)
             msg_color = data.get("color", "#000000")
             
-            # --- [입장 메시지 처리] ---
             if msg_id == "SYSTEM_ENTRY":
                 st.markdown(f"""
                 <div style='text-align:center; color:#888; font-size:0.8em; margin: 10px 0;'>
@@ -471,7 +490,6 @@ else:
                 </div>
                 """, unsafe_allow_html=True)
                 continue 
-            # --------------------------
 
             if is_deleted:
                 if msg_id == "ADMIN_ACCOUNT":
