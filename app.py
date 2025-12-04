@@ -22,7 +22,7 @@ if not firebase_admin._apps:
 db = firestore.client()
 
 # --- 3. UI 및 사용자 이름 설정 ---
-st.title("💬 우리들의 채팅방")
+st.title("💬 정동고1-6반 익명 채팅방")
 
 if "username" not in st.session_state:
     st.session_state.username = "익명"
