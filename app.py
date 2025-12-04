@@ -89,30 +89,22 @@ if not st.session_state.logged_in:
     with tab2:
         st.subheader("새 계정 만들기")
         
-        # [수정됨] 아이디는 자유롭게, 비밀번호에 조건을 명시
         new_id = st.text_input("아이디 (자유롭게 입력)", key="new_id")
         new_pw = st.text_input("비밀번호 (영문+숫자 4자 이상)", type="password", key="new_pw")
         new_nick = st.text_input("사용할 닉네임", key="new_nick")
         
         if st.button("회원가입"):
-            # 1. 아이디 검사 (빈칸만 아니면 됨)
             if not new_id:
                 st.error("아이디를 입력해주세요.")
-            
-            # 2. 비밀번호 검사 (깐깐하게!)
             elif len(new_pw) < 4:
                 st.error("비밀번호는 최소 4글자 이상이어야 합니다.")
             elif not re.search("[a-zA-Z]", new_pw) or not re.search("[0-9]", new_pw):
-                st.error("비밀번호는 영문자와 숫자를 꼭 섞어서 만들어주세요. (보안 강화)")
-            
-            # 3. 닉네임 검사
+                st.error("비밀번호는 영문자와 숫자를 꼭 섞어서 만들어주세요.")
             elif not new_nick:
                 st.error("닉네임을 입력해주세요.")
-            
-            # 4. 중복 아이디 확인 및 가입
             else:
                 if users_ref.document(new_id).get().exists:
-                    st.error("이미 사용 중인 아이디입니다. 다른 걸 써주세요.")
+                    st.error("이미 사용 중인 아이디입니다.")
                 else:
                     users_ref.document(new_id).set({
                         "password": hash_password(new_pw),
@@ -128,6 +120,11 @@ else:
     with st.sidebar:
         st.header(f"👤 {st.session_state.user_nickname}님")
         st.caption(f"ID: {st.session_state.user_id}")
+        
+        # [✨추가됨] 채팅 새로고침 버튼 (가장 잘 보이는 곳에 배치)
+        if st.button("🔄 채팅 새로고침", type="primary"):
+            st.rerun()
+            
         st.divider()
         
         # 닉네임 변경
@@ -168,7 +165,14 @@ else:
                     st.error("암호 오류")
 
     # --- 메인 채팅창 ---
-    st.title("💬 정동고 익명 채팅방")
+    # 제목 옆에 작은 새로고침 팁 추가
+    col1, col2 = st.columns([5, 1])
+    with col1:
+        st.title("💬 정동고 익명 채팅방")
+    with col2:
+        # 화면 오른쪽 위에도 작은 새로고침 버튼 추가
+        if st.button("🔄", help="새로고침"):
+            st.rerun()
     
     docs = chat_ref.order_by("timestamp").stream()
     chat_exists = False
