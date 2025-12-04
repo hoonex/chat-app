@@ -467,7 +467,7 @@ else:
                                 
             # [추가] 관리자 문의 기능 (사용자 사이드바)
             st.divider()
-            with st.expander("📞 관리자에게 문의하기"):
+            with st.expander("관리자에게 문의하기"):
                 inquiry_text = st.text_area("문의 내용 입력", height=100)
                 if st.button("문의 보내기"):
                     if inquiry_text.strip():
