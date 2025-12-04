@@ -6,15 +6,15 @@ import hashlib
 import base64
 import re
 from datetime import datetime, timedelta, timezone
+import pandas as pd # 👈 [추가] 표(DataFrame) 처리를 위해 필요
 
 # --- 1. 페이지 설정 ---
-st.set_page_config(page_title="실시간 채팅", page_icon="💬")
+st.set_page_config(page_title="실시간 채팅", page_icon="💬", layout="wide") 
+# layout="wide"로 변경하여 관리자 화면을 넓게 씁니다.
 
 # --- 2. 설정값 ---
-MAX_CHAT_MESSAGES = 50  # 최대 메시지 저장 개수
-INACTIVE_DAYS_LIMIT = 90 # 미접속 계정 삭제 기준일 (3개월)
-
-# 한국 시간(KST) 설정
+MAX_CHAT_MESSAGES = 50
+INACTIVE_DAYS_LIMIT = 90
 KST = timezone(timedelta(hours=9))
 
 # --- 3. 유틸리티 함수들 ---
@@ -36,7 +36,6 @@ def get_custom_avatar(user_id):
     b64_svg = base64.b64encode(svg_code.encode("utf-8")).decode("utf-8")
     return f"data:image/svg+xml;base64,{b64_svg}"
 
-# [자동 기능 1] 채팅 메시지 개수 관리
 def maintain_chat_history():
     docs = chat_ref.order_by("timestamp").stream()
     doc_list = list(docs)
@@ -45,25 +44,19 @@ def maintain_chat_history():
         for i in range(delete_count):
             doc_list[i].reference.delete()
 
-# [자동 기능 2] 오래된 계정 자동 삭제 (로그인 할 때 수행됨)
 def clean_inactive_users():
     try:
-        # 기준 날짜 (오늘 - 90일)
         cutoff_date = datetime.now(timezone.utc) - timedelta(days=INACTIVE_DAYS_LIMIT)
-        # last_login이 기준보다 옛날인 계정 찾기
         old_users = users_ref.where("last_login", "<", cutoff_date).stream()
         for user in old_users:
             user.reference.delete()
     except:
-        pass # 에러 나도 사용자에게는 티 안 나게 넘어감
+        pass
 
-# 날짜 포맷팅 함수 (오후 2:30 형태)
 def format_time_kst(timestamp):
-    if not timestamp:
-        return ""
-    # UTC -> KST 변환
+    if not timestamp: return "-"
     dt_kst = timestamp.astimezone(KST)
-    return dt_kst.strftime("%p %I:%M").replace("AM", "오전").replace("PM", "오후")
+    return dt_kst.strftime("%Y-%m-%d %p %I:%M").replace("AM", "오전").replace("PM", "오후")
 
 # --- 4. Firebase 연결 ---
 if not firebase_admin._apps:
@@ -80,191 +73,196 @@ users_ref = db.collection("users")
 chat_ref = db.collection("global_chat")
 
 # --- 5. 세션 초기화 ---
-if "logged_in" not in st.session_state:
-    st.session_state.logged_in = False
-if "user_id" not in st.session_state:
-    st.session_state.user_id = ""
-if "user_nickname" not in st.session_state:
-    st.session_state.user_nickname = ""
+if "logged_in" not in st.session_state: st.session_state.logged_in = False
+if "user_id" not in st.session_state: st.session_state.user_id = ""
+if "user_nickname" not in st.session_state: st.session_state.user_nickname = ""
+if "is_admin_mode" not in st.session_state: st.session_state.is_admin_mode = False
 
 # ==========================================
-# [A] 로그인 전 화면
+# [사이드바] 공통 메뉴 & 관리자 스위치
 # ==========================================
-if not st.session_state.logged_in:
-    st.title("정동고 익명 채팅방 입장하기")
-    
-    tab1, tab2 = st.tabs(["로그인", "회원가입"])
-    
-    with tab1:
-        st.subheader("로그인")
-        login_id = st.text_input("아이디", key="login_id")
-        login_pw = st.text_input("비밀번호", type="password", key="login_pw")
+with st.sidebar:
+    if st.session_state.logged_in:
+        st.header(f"👤 {st.session_state.user_nickname}님")
         
-        if st.button("로그인 하기"):
-            if not login_id or not login_pw:
-                st.warning("아이디와 비밀번호를 입력하세요.")
-            else:
-                doc = users_ref.document(login_id).get()
-                if doc.exists:
-                    user_data = doc.to_dict()
-                    if user_data['password'] == hash_password(login_pw):
-                        # 1. 마지막 접속일 업데이트
-                        users_ref.document(login_id).update({
-                            "last_login": firestore.SERVER_TIMESTAMP
-                        })
-                        
-                        # 2. [자동 청소] 로그인 시 오래된 계정 정리 실행
-                        clean_inactive_users()
+        # 닉네임 변경 등 기존 기능들...
+        with st.expander("내 정보 수정"):
+            change_nick = st.text_input("새 닉네임", value=st.session_state.user_nickname)
+            if st.button("저장"):
+                if change_nick != st.session_state.user_nickname:
+                    clean_nick = change_nick.strip()
+                    if clean_nick:
+                        users_ref.document(st.session_state.user_id).update({"nickname": clean_nick})
+                        my_msgs = chat_ref.where("user_id", "==", st.session_state.user_id).stream()
+                        for msg in my_msgs: msg.reference.update({"name": clean_nick})
+                        st.session_state.user_nickname = clean_nick
+                        st.rerun()
 
+        if st.button("🚪 로그아웃"):
+            st.session_state.logged_in = False
+            st.session_state.is_admin_mode = False
+            st.rerun()
+            
+    st.divider()
+    
+    # [핵심] 관리자 모드 진입 스위치
+    st.subheader("🛡️ 관리자")
+    admin_pw_input = st.text_input("관리자 암호", type="password")
+    
+    # 암호가 맞으면 관리자 모드 체크박스 활성화
+    is_correct_admin = ("admin_password" in st.secrets and admin_pw_input == st.secrets["admin_password"])
+    
+    if is_correct_admin:
+        # 체크박스로 모드 전환
+        st.session_state.is_admin_mode = st.checkbox("관리자 대시보드 열기", value=st.session_state.is_admin_mode)
+    else:
+        if admin_pw_input:
+            st.error("암호가 틀렸습니다.")
+        st.session_state.is_admin_mode = False
+
+# ==========================================
+# [A] 관리자 대시보드 (관리자 모드 ON일 때)
+# ==========================================
+if st.session_state.is_admin_mode:
+    st.title("🛡️ 관리자 대시보드")
+    st.info("여기서는 회원 목록을 확인하고 개별적으로 관리할 수 있습니다.")
+    
+    tab_users, tab_chat = st.tabs(["👥 회원 관리", "💬 채팅 데이터 관리"])
+    
+    # --- 1. 회원 관리 탭 ---
+    with tab_users:
+        # 모든 회원 가져오기
+        all_users = list(users_ref.stream())
+        
+        if not all_users:
+            st.warning("가입된 회원이 없습니다.")
+        else:
+            st.metric("총 회원 수", f"{len(all_users)}명")
+            
+            # 표 헤더
+            col1, col2, col3, col4 = st.columns([2, 2, 3, 1])
+            col1.markdown("**아이디**")
+            col2.markdown("**닉네임**")
+            col3.markdown("**마지막 접속**")
+            col4.markdown("**관리**")
+            st.divider()
+            
+            # 회원 리스트 출력
+            for user in all_users:
+                u_data = user.to_dict()
+                u_id = user.id
+                u_nick = u_data.get("nickname", "-")
+                u_last = u_data.get("last_login")
+                
+                c1, c2, c3, c4 = st.columns([2, 2, 3, 1])
+                
+                c1.text(u_id)
+                c2.text(u_nick)
+                c3.text(format_time_kst(u_last))
+                
+                # 삭제 버튼 (각 회원마다 고유 키 부여)
+                if c4.button("삭제", key=f"del_{u_id}", type="primary"):
+                    # DB에서 삭제
+                    users_ref.document(u_id).delete()
+                    st.toast(f"'{u_nick}'({u_id}) 계정을 삭제했습니다.")
+                    time.sleep(1)
+                    st.rerun()
+            
+            st.divider()
+            if st.button("전체 회원 일괄 삭제"):
+                for u in all_users:
+                    u.reference.delete()
+                st.success("모든 회원이 삭제되었습니다.")
+                st.rerun()
+
+    # --- 2. 채팅 데이터 관리 탭 ---
+    with tab_chat:
+        st.write("채팅방 데이터를 강제로 초기화할 수 있습니다.")
+        if st.button("🗑️ 채팅 기록 전체 삭제"):
+            docs = chat_ref.stream()
+            for doc in docs: doc.reference.delete()
+            st.success("채팅방이 초기화되었습니다.")
+
+# ==========================================
+# [B] 일반 사용자 화면 (로그인 전/후)
+# ==========================================
+else:
+    # 1. 로그인 전
+    if not st.session_state.logged_in:
+        st.title("정동고 익명 채팅방 입장하기")
+        tab1, tab2 = st.tabs(["로그인", "회원가입"])
+        
+        with tab1:
+            st.subheader("로그인")
+            login_id = st.text_input("아이디", key="login_id")
+            login_pw = st.text_input("비밀번호", type="password", key="login_pw")
+            if st.button("로그인 하기"):
+                if not login_id or not login_pw: st.warning("입력해주세요.")
+                else:
+                    doc = users_ref.document(login_id).get()
+                    if doc.exists and doc.to_dict()['password'] == hash_password(login_pw):
+                        users_ref.document(login_id).update({"last_login": firestore.SERVER_TIMESTAMP})
+                        clean_inactive_users()
                         st.session_state.logged_in = True
                         st.session_state.user_id = login_id
-                        st.session_state.user_nickname = user_data['nickname']
-                        st.success(f"{user_data['nickname']}님 환영합니다!")
-                        time.sleep(0.5)
+                        st.session_state.user_nickname = doc.to_dict()['nickname']
                         st.rerun()
-                    else:
-                        st.error("비밀번호가 틀렸습니다.")
-                else:
-                    st.error("존재하지 않는 아이디입니다.")
+                    else: st.error("정보가 틀립니다.")
 
-    with tab2:
-        st.subheader("새 계정 만들기")
-        new_id = st.text_input("아이디 (자유롭게 입력)", key="new_id")
-        new_pw = st.text_input("비밀번호 (영문+숫자 4자 이상)", type="password", key="new_pw")
-        new_nick = st.text_input("사용할 닉네임", key="new_nick")
-        
-        if st.button("회원가입"):
-            if not new_id:
-                st.error("아이디를 입력해주세요.")
-            elif len(new_pw) < 4:
-                st.error("비밀번호는 최소 4글자 이상이어야 합니다.")
-            elif not re.search("[a-zA-Z]", new_pw) or not re.search("[0-9]", new_pw):
-                st.error("비밀번호는 영문자와 숫자를 꼭 섞어서 만들어주세요.")
-            elif not new_nick:
-                st.error("닉네임을 입력해주세요.")
-            else:
-                if users_ref.document(new_id).get().exists:
-                    st.error("이미 사용 중인 아이디입니다.")
+        with tab2:
+            st.subheader("회원가입")
+            new_id = st.text_input("아이디", key="new_id")
+            new_pw = st.text_input("비밀번호 (영문+숫자 4자 이상)", type="password", key="new_pw")
+            new_nick = st.text_input("닉네임", key="new_nick")
+            if st.button("회원가입"):
+                if len(new_pw) < 4 or not (re.search("[a-zA-Z]", new_pw) and re.search("[0-9]", new_pw)):
+                    st.error("비밀번호 조건을 확인해주세요.")
+                elif users_ref.document(new_id).get().exists:
+                    st.error("이미 있는 아이디입니다.")
                 else:
                     users_ref.document(new_id).set({
                         "password": hash_password(new_pw),
                         "nickname": new_nick,
                         "last_login": firestore.SERVER_TIMESTAMP
                     })
-                    st.success("회원가입 성공! 로그인 탭에서 로그인해주세요.")
+                    st.success("가입 완료! 로그인해주세요.")
 
-# ==========================================
-# [B] 로그인 후 화면
-# ==========================================
-else:
-    with st.sidebar:
-        st.header(f"👤 {st.session_state.user_nickname}님")
+    # 2. 로그인 후 (채팅 화면)
+    else:
+        # 메인 채팅창
+        col1, col2 = st.columns([3, 1])
+        with col1: st.title("💬 정동고 익명 채팅방")
+        with col2: 
+            if st.button("🔄 채팅 새로고침"): st.rerun()
         
-        st.divider()
+        docs = chat_ref.order_by("timestamp").stream()
+        chat_exists = False
         
-        with st.expander("닉네임 변경"):
-            change_nick = st.text_input("새 닉네임", value=st.session_state.user_nickname)
-            if st.button("저장"):
-                if change_nick != st.session_state.user_nickname:
-                    clean_nick = change_nick.strip()
-                    if clean_nick:
-                        with st.spinner("업데이트 중..."):
-                            users_ref.document(st.session_state.user_id).update({"nickname": clean_nick})
-                            my_msgs = chat_ref.where("user_id", "==", st.session_state.user_id).stream()
-                            for msg in my_msgs:
-                                msg.reference.update({"name": clean_nick})
-                            st.session_state.user_nickname = clean_nick
-                            st.success("완료!")
-                            time.sleep(1)
-                            st.rerun()
-        
-        st.divider()
-        if st.button("🚪 로그아웃"):
-            st.session_state.logged_in = False
-            st.rerun()
-
-        st.divider()
-        
-        with st.expander("🛠 관리자 메뉴"):
-            admin_pw = st.text_input("관리자 암호", type="password")
-            is_admin = ("admin_password" in st.secrets and admin_pw == st.secrets["admin_password"])
+        for doc in docs:
+            chat_exists = True
+            data = doc.to_dict()
+            msg_id = data.get("user_id")
+            msg_name = data.get("name")
+            msg_text = data.get("message")
+            msg_time = format_time_kst(data.get("timestamp"))
             
-            if st.button("🗑️ 채팅 전체 삭제"):
-                if is_admin:
-                    with st.spinner("삭제 중..."):
-                        docs = chat_ref.stream()
-                        for doc in docs: doc.reference.delete()
-                    st.success("완료")
-                    time.sleep(1)
-                    st.rerun()
-                else:
-                    st.error("암호 오류")
+            text_html = f"""{msg_text}<div style='display:block;text-align:right;font-size:0.7em;color:grey;'>{msg_time}</div>"""
             
-            if st.button("계정 전체 삭제"):
-                if is_admin:
-                    with st.spinner("삭제 중..."):
-                        users = users_ref.stream()
-                        for user in users: user.reference.delete()
-                    st.success("완료")
-                    st.session_state.logged_in = False
-                    time.sleep(1)
-                    st.rerun()
-                else:
-                    st.error("암호 오류")
-
-        # [NEW] 사이드바 마지막에 안내 문구 추가
-        st.divider()
-        st.caption(f"ℹ️ {INACTIVE_DAYS_LIMIT}일 이상 접속하지 않은 계정은\n서버 용량 확보를 위해 자동 삭제됩니다.")
-
-    # --- 메인 채팅창 ---
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        st.title("💬 정동고 익명 채팅방")
-    with col2:
-        if st.button("🔄 채팅 새로고침"): 
+            if msg_id == st.session_state.user_id:
+                with st.chat_message("user"): st.markdown(text_html, unsafe_allow_html=True)
+            else:
+                with st.chat_message(msg_name, avatar=get_custom_avatar(msg_id)):
+                    st.markdown(f"**{msg_name}**")
+                    st.markdown(text_html, unsafe_allow_html=True)
+                    
+        if not chat_exists: st.info("대화가 없습니다.")
+            
+        if prompt := st.chat_input("메시지 입력..."):
+            chat_ref.add({
+                "user_id": st.session_state.user_id,
+                "name": st.session_state.user_nickname,
+                "message": prompt,
+                "timestamp": firestore.SERVER_TIMESTAMP
+            })
+            maintain_chat_history()
             st.rerun()
-    
-    docs = chat_ref.order_by("timestamp").stream()
-    chat_exists = False
-    
-    for doc in docs:
-        chat_exists = True
-        data = doc.to_dict()
-        msg_sender_id = data.get("user_id")
-        msg_name = data.get("name")
-        msg_text = data.get("message")
-        msg_time = data.get("timestamp") # 시간 가져오기
-        
-        # 시간 문자열 포맷팅
-        time_str = format_time_kst(msg_time) if msg_time else ""
-        
-        # HTML을 사용해서 시간을 오른쪽에 작게 표시
-        # float: right로 오른쪽 정렬, color: grey로 회색 처리
-        text_with_time = f"""
-        {msg_text} 
-        <div style='display: block; text-align: right; font-size: 0.75em; color: grey; margin-top: 5px;'>
-            {time_str}
-        </div>
-        """
-        
-        if msg_sender_id == st.session_state.user_id:
-            with st.chat_message("user"):
-                st.markdown(text_with_time, unsafe_allow_html=True)
-        else:
-            custom_avatar = get_custom_avatar(msg_sender_id)
-            with st.chat_message(msg_name, avatar=custom_avatar):
-                st.markdown(f"**{msg_name}**")
-                st.markdown(text_with_time, unsafe_allow_html=True)
-                
-    if not chat_exists:
-        st.info("대화가 없습니다.")
-        
-    if prompt := st.chat_input("메시지 입력..."):
-        chat_ref.add({
-            "user_id": st.session_state.user_id,
-            "name": st.session_state.user_nickname,
-            "message": prompt,
-            "timestamp": firestore.SERVER_TIMESTAMP
-        })
-        maintain_chat_history()
-        st.rerun()
