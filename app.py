@@ -10,7 +10,7 @@ import base64
 # --- 1. 페이지 설정 ---
 st.set_page_config(page_title="실시간 채팅", page_icon="💬")
 
-# --- 2. 아바타 생성 함수 ---
+# --- 2. 아바타 생성 함수 (색상 유지용) ---
 def get_custom_avatar(user_id):
     hash_object = hashlib.md5(user_id.encode())
     hex_dig = hash_object.hexdigest()
@@ -42,28 +42,25 @@ chat_ref = db.collection("global_chat")
 with st.sidebar:
     st.header("👤 계정 설정")
     
+    # ID 생성
     if "user_id" not in st.session_state:
         st.session_state.user_id = str(uuid.uuid4())
     
+    # ID 복구용 입력창
     input_id = st.text_input("고유 ID (복구용)", value=st.session_state.user_id)
     
-    # [수정된 부분] 에러가 나던 로그인 버튼 로직을 안전하게 변경
+    # 로그인 버튼
     if st.button("🆔 이 ID로 로그인"):
         st.session_state.user_id = input_id.strip()
         
-        # [해결책] DB에서는 order_by를 뺍니다. (인덱스 에러 방지)
-        # 그냥 해당 ID로 쓴 글을 다 가져온 뒤, 파이썬에서 최신순을 찾습니다.
+        # 최근 닉네임 찾기 로직 (에러 방지용으로 파이썬 처리)
         docs = chat_ref.where("user_id", "==", st.session_state.user_id).stream()
-        
         found_name = None
         latest_time = None
 
-        # 파이썬 반복문으로 가장 최신 글의 닉네임을 찾음
         for doc in docs:
             data = doc.to_dict()
             msg_time = data.get("timestamp")
-            
-            # 시간이 없거나(None), 더 최신이면 갱신
             if latest_time is None or (msg_time and msg_time > latest_time):
                 latest_time = msg_time
                 found_name = data.get("name")
@@ -74,18 +71,35 @@ with st.sidebar:
             time.sleep(1)
             st.rerun()
         else:
-            st.warning("이 ID로 작성된 대화가 없거나 찾을 수 없습니다.")
+            st.warning("이 ID의 기록이 없습니다. (새 계정)")
 
     st.divider()
 
+    # 닉네임 설정 초기값
     if "user_nickname" not in st.session_state:
         st.session_state.user_nickname = "익명"
 
+    # [핵심 수정] 닉네임을 입력받고, 변경되었는지 확인합니다.
     new_nickname = st.text_input("닉네임", value=st.session_state.user_nickname)
+    
+    # 만약 입력한 닉네임이 기존과 다르다면? (이름을 바꿨다면)
     if new_nickname != st.session_state.user_nickname:
+        # 1. 일단 세션에 저장
         st.session_state.user_nickname = new_nickname
+        MY_NAME = new_nickname.strip()
+        if not MY_NAME: MY_NAME = "익명"
+
+        # 2. [과거 기록 수정] DB에서 내 ID로 쓴 글을 전부 찾아서 이름을 업데이트
+        with st.spinner(f"과거 채팅 기록의 이름을 '{MY_NAME}'(으)로 변경 중..."):
+            my_docs = chat_ref.where("user_id", "==", st.session_state.user_id).stream()
+            for doc in my_docs:
+                doc.reference.update({"name": MY_NAME})
+        
+        st.success("닉네임 변경 완료! 모든 기록이 업데이트되었습니다.")
+        time.sleep(1)
         st.rerun()
 
+    # 현재 확정된 이름
     MY_NAME = st.session_state.user_nickname.strip()
     if not MY_NAME:
         MY_NAME = "익명"
@@ -115,8 +129,7 @@ with st.sidebar:
 # --- 5. 메인 채팅 화면 ---
 st.title("💬 정동고 익명 채팅방")
 
-# 전체 채팅 목록은 시간순 정렬이 필요하므로 그대로 둡니다. 
-# (단순 정렬만 하는 건 인덱스 없이도 잘 됩니다)
+# 메시지 가져오기
 docs = chat_ref.order_by("timestamp").stream()
 chat_exists = False
 
@@ -128,10 +141,14 @@ for doc in docs:
     message_text = data.get("message", "")
     sender_id = data.get("user_id", "")
     
+    # 1. 내 글 (오른쪽)
     if sender_id == st.session_state.user_id:
         with st.chat_message("user"):
             st.write(message_text)
+            
+    # 2. 남의 글 (왼쪽)
     else:
+        # 색상은 ID 기준(sender_id)이므로 이름 바꿔도 색은 유지됨!
         seed = sender_id if sender_id else sender_name
         custom_icon_url = get_custom_avatar(seed)
         
