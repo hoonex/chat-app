@@ -155,7 +155,7 @@ if not st.session_state.logged_in:
                 "password": "GUEST_NO_PASSWORD",
                 "nickname": guest_nick,
                 "last_login": firestore.SERVER_TIMESTAMP,
-                "is_guest": True # 익명 여부 표시
+                "is_guest": True 
             })
             
             st.session_state.logged_in = True
@@ -205,6 +205,19 @@ if not st.session_state.logged_in:
 # [B] 로그인 성공 후
 # ==========================================
 else:
+    # --- [핵심 수정] 접속 유효성 검사 (추방 확인 로직) ---
+    # 관리자가 아닐 경우, 매번 페이지 로드 시 DB에 내 ID가 살아있는지 확인
+    if not st.session_state.is_super_admin:
+        # DB에서 내 문서 조회
+        check_user = users_ref.document(st.session_state.user_id).get()
+        if not check_user.exists:
+            # 문서가 없으면(추방당했거나 삭제됨) 강제 로그아웃
+            st.error("🚫 관리자에 의해 추방되었거나 계정이 만료되었습니다.")
+            st.session_state.logged_in = False
+            time.sleep(2)
+            st.rerun()
+    # --------------------------------------------------
+
     sys_config = get_system_config()
     is_chat_locked = sys_config.get("is_locked", False)
     banned_words = sys_config.get("banned_words", "")
@@ -243,13 +256,10 @@ else:
 
         with admin_tab2:
             st.subheader("회원 목록 및 관리")
-            
-            # [추가] 유령 익명 계정 정리 버튼
             st.info("💡 로그아웃을 안 하고 창을 닫은 익명 유저들이 목록에 남을 수 있습니다.")
             if st.button("🧹 24시간 지난 익명 유령 계정 삭제"):
                 deleted_count = 0
                 cutoff = datetime.now(timezone.utc) - timedelta(days=1)
-                # 인덱스 없이 하기 위해 스트림 후 필터링 (데이터 많으면 인덱스 필요)
                 guests = users_ref.where("is_guest", "==", True).stream()
                 for g in guests:
                     g_data = g.to_dict()
@@ -296,7 +306,7 @@ else:
 
                     if cc4.button("추방", key=f"ban_{u_id}", type="primary"):
                         users_ref.document(u_id).delete()
-                        st.toast("삭제 완료")
+                        st.toast(f"{u_nick}님을 추방했습니다.")
                         time.sleep(1)
                         st.rerun()
 
@@ -336,7 +346,10 @@ else:
                         with mc2:
                             if not is_deleted:
                                 if st.button("삭제", key=f"adm_del_{doc_id}", type="primary"):
-                                    chat_ref.document(doc_id).update({"is_deleted": True})
+                                    chat_ref.document(doc_id).update({
+                                        "is_deleted": True,
+                                        "message": "🚫 관리자에 의해 삭제된 글입니다."
+                                    })
                                     st.rerun()
             st.divider()
             notice_msg = st.text_input("공지 내용")
@@ -466,7 +479,7 @@ else:
                                 for s_msg in sys_msgs:
                                     s_msg.reference.update({"message": f"👋 {clean_nick}님이 입장했습니다."})
                                 st.session_state.user_nickname = clean_nick
-                                st.toast("닉네임 변경 완료.")
+                                st.toast("닉네임 변경 완료. 입장 알림도 수정되었습니다.")
                                 time.sleep(1)
                                 st.rerun()
             
@@ -488,10 +501,7 @@ else:
                         st.warning("내용을 입력해주세요.")
 
             st.divider()
-            
-            # [수정] 로그아웃 버튼 (익명일 경우 회원 탈퇴 처리)
             if st.button("🚪 로그아웃"):
-                # guest_로 시작하는 아이디는 DB에서 삭제
                 if st.session_state.user_id.startswith("guest_"):
                     users_ref.document(st.session_state.user_id).delete()
                 
