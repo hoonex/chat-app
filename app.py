@@ -6,7 +6,6 @@ import hashlib
 import base64
 import re
 from datetime import datetime, timedelta, timezone
-import pandas as pd
 
 # --- 1. 페이지 설정 ---
 st.set_page_config(page_title="실시간 채팅", page_icon="💬", layout="wide")
@@ -21,6 +20,10 @@ def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
 def get_custom_avatar(user_id):
+    # 관리자일 경우 특별한 아이콘 리턴
+    if user_id == "ADMIN_ACCOUNT":
+        return "📢"
+        
     hash_object = hashlib.md5(user_id.encode())
     hex_dig = hash_object.hexdigest()
     color_hex = hex_dig[:6]
@@ -51,7 +54,7 @@ def clean_inactive_users():
 def format_time_kst(timestamp):
     if not timestamp: return "-"
     dt_kst = timestamp.astimezone(KST)
-    return dt_kst.strftime("%Y-%m-%d %p %I:%M").replace("AM", "오전").replace("PM", "오후")
+    return dt_kst.strftime("%p %I:%M").replace("AM", "오전").replace("PM", "오후")
 
 # --- 4. Firebase 연결 ---
 if not firebase_admin._apps:
@@ -71,34 +74,52 @@ chat_ref = db.collection("global_chat")
 if "logged_in" not in st.session_state: st.session_state.logged_in = False
 if "user_id" not in st.session_state: st.session_state.user_id = ""
 if "user_nickname" not in st.session_state: st.session_state.user_nickname = ""
-if "is_admin_mode" not in st.session_state: st.session_state.is_admin_mode = False
+if "is_super_admin" not in st.session_state: st.session_state.is_super_admin = False
 
 
 # ==========================================
-# [A] 로그인 전 화면 (로그인 / 회원가입)
+# [A] 로그인 화면 (일반 / 관리자 분기점)
 # ==========================================
 if not st.session_state.logged_in:
-    st.title("🔒정동고 익명 채팅방 입장하기")
+    st.title("정동고 익명 채팅방 입장하기")
     
-    # 로그인 화면에서는 관리자 메뉴가 아예 안 보임!
     tab1, tab2 = st.tabs(["로그인", "회원가입"])
     
     with tab1:
         st.subheader("로그인")
         login_id = st.text_input("아이디", key="login_id")
         login_pw = st.text_input("비밀번호", type="password", key="login_pw")
+        
         if st.button("로그인 하기"):
-            if not login_id or not login_pw: st.warning("입력해주세요.")
+            if not login_id or not login_pw:
+                st.warning("입력해주세요.")
             else:
-                doc = users_ref.document(login_id).get()
-                if doc.exists and doc.to_dict()['password'] == hash_password(login_pw):
-                    users_ref.document(login_id).update({"last_login": firestore.SERVER_TIMESTAMP})
-                    clean_inactive_users()
-                    st.session_state.logged_in = True
-                    st.session_state.user_id = login_id
-                    st.session_state.user_nickname = doc.to_dict()['nickname']
-                    st.rerun()
-                else: st.error("정보가 틀립니다.")
+                # [관리자 로그인 로직]
+                # 아이디가 'admin'이면 DB 안 보고 Secrets의 비번과 대조
+                if login_id == "admin":
+                    if "admin_password" in st.secrets and login_pw == st.secrets["admin_password"]:
+                        st.session_state.logged_in = True
+                        st.session_state.user_id = "ADMIN_ACCOUNT"
+                        st.session_state.user_nickname = "관리자"
+                        st.session_state.is_super_admin = True # 관리자 플래그 ON
+                        st.success("관리자 모드로 접속합니다.")
+                        time.sleep(0.5)
+                        st.rerun()
+                    else:
+                        st.error("관리자 비밀번호가 틀렸습니다.")
+                
+                # [일반 유저 로그인 로직]
+                else:
+                    doc = users_ref.document(login_id).get()
+                    if doc.exists and doc.to_dict()['password'] == hash_password(login_pw):
+                        users_ref.document(login_id).update({"last_login": firestore.SERVER_TIMESTAMP})
+                        clean_inactive_users()
+                        st.session_state.logged_in = True
+                        st.session_state.user_id = login_id
+                        st.session_state.user_nickname = doc.to_dict()['nickname']
+                        st.session_state.is_super_admin = False # 일반 유저
+                        st.rerun()
+                    else: st.error("정보가 틀립니다.")
 
     with tab2:
         st.subheader("회원가입")
@@ -106,7 +127,10 @@ if not st.session_state.logged_in:
         new_pw = st.text_input("비밀번호 (영문+숫자 4자 이상)", type="password", key="new_pw")
         new_nick = st.text_input("닉네임", key="new_nick")
         if st.button("회원가입"):
-            if len(new_pw) < 4 or not (re.search("[a-zA-Z]", new_pw) and re.search("[0-9]", new_pw)):
+            # admin 아이디는 생성 불가
+            if new_id.lower() == "admin":
+                st.error("이 아이디는 사용할 수 없습니다.")
+            elif len(new_pw) < 4 or not (re.search("[a-zA-Z]", new_pw) and re.search("[0-9]", new_pw)):
                 st.error("비밀번호 조건을 확인해주세요.")
             elif users_ref.document(new_id).get().exists:
                 st.error("이미 있는 아이디입니다.")
@@ -119,70 +143,52 @@ if not st.session_state.logged_in:
                 st.success("가입 완료! 로그인해주세요.")
 
 # ==========================================
-# [B] 로그인 후 화면 (채팅 OR 관리자 대시보드)
+# [B] 로그인 성공 후
 # ==========================================
 else:
-    # --- 사이드바 (로그인 했을 때만 보임) ---
-    with st.sidebar:
-        st.header(f"👤 {st.session_state.user_nickname}님")
+    # ----------------------------------------------------
+    # [B-1] 관리자 전용 화면 (Super Admin)
+    # ----------------------------------------------------
+    if st.session_state.is_super_admin:
+        st.sidebar.header("🛡️ 관리자 메뉴")
+        st.sidebar.info("현재 'admin' 계정으로 접속 중입니다.")
         
-        # 닉네임 변경
-        with st.expander("내 정보 수정"):
-            change_nick = st.text_input("새 닉네임", value=st.session_state.user_nickname)
-            if st.button("저장"):
-                if change_nick != st.session_state.user_nickname:
-                    clean_nick = change_nick.strip()
-                    if clean_nick:
-                        users_ref.document(st.session_state.user_id).update({"nickname": clean_nick})
-                        my_msgs = chat_ref.where("user_id", "==", st.session_state.user_id).stream()
-                        for msg in my_msgs: msg.reference.update({"name": clean_nick})
-                        st.session_state.user_nickname = clean_nick
-                        st.rerun()
-
-        if st.button("🚪 로그아웃"):
+        if st.sidebar.button("🚪 관리자 로그아웃"):
             st.session_state.logged_in = False
-            st.session_state.is_admin_mode = False
+            st.session_state.is_super_admin = False
             st.rerun()
-            
-        st.divider()
-        
-        # [수정됨] 아주 작게 숨겨진 관리자 메뉴
-        # 'expander'를 써서 평소엔 접어둡니다.
-        with st.expander("🔐 관리자 설정"):
-            admin_pw_input = st.text_input("암호 입력", type="password", key="admin_key")
-            
-            # 암호 확인
-            is_correct_admin = ("admin_password" in st.secrets and admin_pw_input == st.secrets["admin_password"])
-            
-            if is_correct_admin:
-                # 암호가 맞으면 대시보드 스위치 표시
-                st.success("인증됨")
-                st.session_state.is_admin_mode = st.checkbox("관리자 모드 켜기", value=st.session_state.is_admin_mode)
-            else:
-                st.session_state.is_admin_mode = False
-                if admin_pw_input:
-                    st.caption("암호가 틀렸습니다.")
 
-    # -------------------------------------------
-    # [1] 관리자 대시보드 모드
-    # -------------------------------------------
-    if st.session_state.is_admin_mode:
-        st.title("🛡️ 관리자 대시보드")
-        st.info("회원 및 채팅 데이터를 관리합니다.")
+        st.title("🕵️‍♂️ 관리자 통제 센터")
         
-        tab_users, tab_chat = st.tabs(["👥 회원 관리", "💬 채팅 관리"])
+        # 탭 구성: 대시보드(통계) / 회원관리 / 채팅모니터링(공지)
+        admin_tab1, admin_tab2, admin_tab3 = st.tabs(["📊 현황 통계", "👥 회원 관리", "📢 모니터링 & 공지"])
         
-        with tab_users:
+        # --- 1. 통계 탭 ---
+        with admin_tab1:
             all_users = list(users_ref.stream())
+            all_chats = list(chat_ref.stream())
+            
+            col1, col2 = st.columns(2)
+            col1.metric("총 회원 수", f"{len(all_users)}명")
+            col2.metric("누적 메시지 수", f"{len(all_chats)}개")
+            
+            st.divider()
+            st.write("💡 **시스템 상태:** 정상 가동 중")
+            st.caption(f"최대 메시지 저장 제한: {MAX_CHAT_MESSAGES}개")
+            st.caption(f"미접속 삭제 기준: {INACTIVE_DAYS_LIMIT}일")
+
+        # --- 2. 회원 관리 탭 ---
+        with admin_tab2:
+            st.subheader("회원 목록")
             if not all_users:
-                st.warning("회원 없음")
+                st.info("가입된 회원이 없습니다.")
             else:
-                st.metric("총 회원", f"{len(all_users)}명")
-                col1, col2, col3, col4 = st.columns([2, 2, 3, 1])
-                col1.markdown("**아이디**")
-                col2.markdown("**닉네임**")
-                col3.markdown("**접속일**")
-                col4.markdown("**관리**")
+                # 헤더
+                c1, c2, c3, c4 = st.columns([2, 2, 3, 1])
+                c1.markdown("**ID**")
+                c2.markdown("**닉네임**")
+                c3.markdown("**마지막 접속**")
+                c4.markdown("**추방**")
                 st.divider()
                 
                 for user in all_users:
@@ -190,31 +196,94 @@ else:
                     u_id = user.id
                     u_nick = u_data.get("nickname", "-")
                     u_last = u_data.get("last_login")
-                    c1, c2, c3, c4 = st.columns([2, 2, 3, 1])
-                    c1.text(u_id)
-                    c2.text(u_nick)
-                    c3.text(format_time_kst(u_last))
-                    if c4.button("삭제", key=f"del_{u_id}", type="primary"):
+                    
+                    cc1, cc2, cc3, cc4 = st.columns([2, 2, 3, 1])
+                    cc1.text(u_id)
+                    cc2.text(u_nick)
+                    cc3.text(format_time_kst(u_last))
+                    
+                    if cc4.button("삭제", key=f"ban_{u_id}", type="primary"):
                         users_ref.document(u_id).delete()
+                        st.toast(f"사용자 {u_id}를 삭제했습니다.")
+                        time.sleep(1)
                         st.rerun()
-                
-                st.divider()
-                if st.button("회원 전체 삭제"):
-                    for u in all_users: u.reference.delete()
-                    st.success("삭제 완료")
-                    st.rerun()
+            
+            st.divider()
+            if st.button("전체 회원 초기화 (복구 불가)"):
+                for u in all_users: u.reference.delete()
+                st.success("모든 회원이 삭제되었습니다.")
+                st.rerun()
 
-        with tab_chat:
-            if st.button("🗑️ 채팅 기록 전체 삭제"):
+        # --- 3. 모니터링 & 공지 탭 ---
+        with admin_tab3:
+            st.subheader("💬 실시간 모니터링")
+            
+            # 채팅 기록 초기화 버튼
+            if st.button("🗑️ 채팅방 청소 (기록 삭제)"):
                 docs = chat_ref.stream()
                 for doc in docs: doc.reference.delete()
-                st.success("초기화 완료")
+                st.success("채팅방이 깨끗해졌습니다.")
+                st.rerun()
 
-    # -------------------------------------------
-    # [2] 일반 채팅 모드 (기본)
-    # -------------------------------------------
+            st.divider()
+            
+            # 채팅 내역 보여주기 (읽기 전용 느낌)
+            chat_container = st.container(height=400)
+            docs = chat_ref.order_by("timestamp").stream()
+            with chat_container:
+                for doc in docs:
+                    data = doc.to_dict()
+                    name = data.get("name")
+                    msg = data.get("message")
+                    time_str = format_time_kst(data.get("timestamp"))
+                    st.text(f"[{time_str}] {name}: {msg}")
+
+            st.divider()
+            
+            # [특별 기능] 공지사항 보내기
+            st.subheader("📢 전체 공지 보내기")
+            notice_msg = st.text_input("공지할 내용을 입력하세요", placeholder="예: 서버 점검 예정입니다.")
+            
+            if st.button("공지 전송"):
+                if notice_msg:
+                    chat_ref.add({
+                        "user_id": "ADMIN_ACCOUNT", # 특수 ID
+                        "name": "📢 관리자",       # 특수 이름
+                        "message": notice_msg,
+                        "timestamp": firestore.SERVER_TIMESTAMP
+                    })
+                    maintain_chat_history()
+                    st.success("공지가 전송되었습니다!")
+                    st.rerun()
+
+    # ----------------------------------------------------
+    # [B-2] 일반 사용자 화면
+    # ----------------------------------------------------
     else:
-        # 채팅방 UI
+        # 사이드바 (일반 유저용)
+        with st.sidebar:
+            st.header(f"👤 {st.session_state.user_nickname}님")
+            
+            with st.expander("닉네임 변경"):
+                change_nick = st.text_input("새 닉네임", value=st.session_state.user_nickname)
+                if st.button("저장"):
+                    if change_nick != st.session_state.user_nickname:
+                        clean_nick = change_nick.strip()
+                        if clean_nick:
+                            users_ref.document(st.session_state.user_id).update({"nickname": clean_nick})
+                            my_msgs = chat_ref.where("user_id", "==", st.session_state.user_id).stream()
+                            for msg in my_msgs: msg.reference.update({"name": clean_nick})
+                            st.session_state.user_nickname = clean_nick
+                            st.rerun()
+            
+            if st.button("🚪 로그아웃"):
+                st.session_state.logged_in = False
+                st.rerun()
+            
+            st.divider()
+            st.caption("문의사항은 관리자에게 연락하세요.")
+
+        # 메인 채팅창
         col1, col2 = st.columns([3, 1])
         with col1: st.title("💬 정동고 익명 채팅방")
         with col2: 
@@ -233,8 +302,18 @@ else:
             
             text_html = f"""{msg_text}<div style='display:block;text-align:right;font-size:0.7em;color:grey;'>{msg_time}</div>"""
             
-            if msg_id == st.session_state.user_id:
+            # [관리자 공지사항 특별 처리]
+            if msg_id == "ADMIN_ACCOUNT":
+                # 빨간색 경고창 스타일로 표시
+                with st.chat_message("admin", avatar="📢"):
+                    st.error(f"**[공지] {msg_text}**") 
+                    # error 박스를 쓰면 빨간색으로 강조됨
+            
+            # 내 메시지
+            elif msg_id == st.session_state.user_id:
                 with st.chat_message("user"): st.markdown(text_html, unsafe_allow_html=True)
+            
+            # 남 메시지
             else:
                 with st.chat_message(msg_name, avatar=get_custom_avatar(msg_id)):
                     st.markdown(f"**{msg_name}**")
