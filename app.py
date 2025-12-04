@@ -6,7 +6,7 @@ import hashlib
 import base64
 import re
 from datetime import datetime, timedelta, timezone
-import streamlit.components.v1 as components  # 👈 [추가됨] 자바스크립트 사용을 위해 필수
+import streamlit.components.v1 as components
 
 # --- 1. 페이지 설정 ---
 st.set_page_config(page_title="실시간 채팅", page_icon="💬", layout="wide")
@@ -136,7 +136,7 @@ if not st.session_state.logged_in:
 # ==========================================
 else:
     # ----------------------------------------------------
-    # [B-1] 관리자 전용 화면 (노란 배경)
+    # [B-1] 관리자 전용 화면
     # ----------------------------------------------------
     if st.session_state.is_super_admin:
         st.markdown("""
@@ -238,36 +238,41 @@ else:
     # [B-2] 일반 사용자 화면
     # ----------------------------------------------------
     else:
-        # [핵심] 자바스크립트로 버튼을 강제로 이동시키는 코드
-        # 이 코드는 HTML/JS를 주입하여 '🔄 채팅 새로고침'이라는 텍스트가 있는 버튼을 찾습니다.
-        # 그리고 CSS 스타일을 직접 꽂아서 위치를 고정시킵니다.
+        # [수정] 버튼 위치를 오른쪽 상단으로 변경 & 크기 고정
         components.html("""
             <script>
                 function fixButtonPosition() {
                     const buttons = window.parent.document.querySelectorAll('button');
                     buttons.forEach(btn => {
                         if (btn.innerText.includes('🔄 채팅 새로고침')) {
+                            // 1. 강제 고정
                             btn.style.position = 'fixed';
-                            btn.style.bottom = '90px';
+                            
+                            // 2. 위치: 오른쪽 위 (헤더 바로 아래)
+                            btn.style.top = '70px'; 
                             btn.style.right = '20px';
-                            btn.style.left = 'auto';
+                            btn.style.bottom = 'auto'; // 하단 위치 해제
+                            btn.style.left = 'auto';   // 왼쪽 위치 해제
+                            
+                            // 3. 스타일: 작고 예쁘게
+                            btn.style.width = 'auto';  // [중요] 길게 늘어나는 것 방지!
+                            btn.style.minWidth = '0px'; // 최소 너비 해제
                             btn.style.zIndex = '999999';
                             btn.style.backgroundColor = 'white';
                             btn.style.color = '#FF4B4B';
-                            btn.style.border = '2px solid #FF4B4B';
-                            btn.style.borderRadius = '20px';
+                            btn.style.border = '1px solid #FF4B4B';
+                            btn.style.borderRadius = '15px';
                             btn.style.fontWeight = 'bold';
-                            btn.style.padding = '8px 16px';
-                            btn.style.boxShadow = '0 4px 6px rgba(0,0,0,0.1)';
+                            btn.style.padding = '5px 12px'; // 안쪽 여백 줄임 (버튼 작게)
+                            btn.style.boxShadow = '0 2px 5px rgba(0,0,0,0.1)';
                         }
                     });
                 }
-                // 화면이 로드되거나 바뀔 때마다 실행하여 위치 고정
+                // 지속적으로 위치 고정
                 setInterval(fixButtonPosition, 500);
             </script>
         """, height=0, width=0)
         
-        # 실제 버튼 (위치는 JS가 강제로 옮기므로 어디에 두든 상관없음)
         if st.button("🔄 채팅 새로고침"):
             st.rerun()
 
