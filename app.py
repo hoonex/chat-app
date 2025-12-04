@@ -5,6 +5,7 @@ import time
 import hashlib
 import base64
 import re
+import uuid # [NEW] 익명 아이디 생성을 위해 필요
 from datetime import datetime, timedelta, timezone
 import streamlit.components.v1 as components
 
@@ -15,7 +16,7 @@ st.set_page_config(page_title="실시간 채팅", page_icon="💬", layout="wide
 MAX_CHAT_MESSAGES = 50
 INACTIVE_DAYS_LIMIT = 90
 KST = timezone(timedelta(hours=9))
-DEFAULT_DAILY_LIMIT = 9999 # 기본 제한 시간 (분) - 사실상 무제한
+DEFAULT_DAILY_LIMIT = 0 # [변경] 0이면 무제한
 
 # --- 3. 유틸리티 함수들 ---
 def hash_password(password):
@@ -72,19 +73,19 @@ def filter_message(text, banned_words_str):
         if word in text: text = text.replace(word, "*" * len(word))
     return text
 
-# [NEW] 시간 제한 체크 및 업데이트 함수
+# 시간 제한 체크 (0이면 무제한)
 def check_time_limit(user_id):
     if user_id == "ADMIN_ACCOUNT":
-        return True, 0, 9999
+        return True, 0, 0
         
     user_ref = users_ref.document(user_id)
     user_doc = user_ref.get()
     
     if not user_doc.exists:
-        return True, 0, 9999
+        return True, 0, 0
 
     data = user_doc.to_dict()
-    daily_limit = data.get("daily_limit", DEFAULT_DAILY_LIMIT)
+    daily_limit = data.get("daily_limit", 0) # 기본값 0 (무제한)
     used_minutes = data.get("used_minutes", 0)
     last_active_ts = data.get("last_active_ts")
     last_date_str = data.get("last_date_str")
@@ -92,33 +93,28 @@ def check_time_limit(user_id):
     now = datetime.now(KST)
     today_str = now.strftime("%Y-%m-%d")
     
-    # 1. 날짜가 바뀌었으면 사용량 초기화
     if last_date_str != today_str:
         used_minutes = 0
         last_date_str = today_str
         
-    # 2. 사용 시간 누적 계산 (마지막 활동으로부터 흐른 시간)
     added_time = 0
     if last_active_ts:
-        # DB의 타임스탬프를 KST로 변환
         last_active = last_active_ts.astimezone(KST)
         diff = (now - last_active).total_seconds() / 60
-        # 10분 이내의 활동만 연속된 세션으로 인정 (장시간 자리는 제외)
         if diff < 10: 
             added_time = diff
             
     new_used = used_minutes + added_time
     
-    # 3. DB 업데이트
     user_ref.update({
         "used_minutes": new_used,
         "last_active_ts": firestore.SERVER_TIMESTAMP,
         "last_date_str": last_date_str
     })
     
-    # 4. 제한 초과 여부 확인
-    if new_used > daily_limit:
-        return False, int(new_used), daily_limit # 차단
+    # [수정] limit가 0보다 클 때만 체크 (0은 무제한)
+    if daily_limit > 0 and new_used > daily_limit:
+        return False, int(new_used), daily_limit 
         
     return True, int(new_used), daily_limit
 
@@ -149,6 +145,7 @@ if "is_super_admin" not in st.session_state: st.session_state.is_super_admin = F
 # ==========================================
 if not st.session_state.logged_in:
     st.title("정동고 익명 채팅방 입장하기")
+    
     tab1, tab2 = st.tabs(["로그인", "회원가입"])
     
     with tab1:
@@ -172,10 +169,9 @@ if not st.session_state.logged_in:
                 else:
                     doc = users_ref.document(login_id).get()
                     if doc.exists and doc.to_dict()['password'] == hash_password(login_pw):
-                        # 로그인 시 마지막 활동 시간 초기화
                         users_ref.document(login_id).update({
                             "last_login": firestore.SERVER_TIMESTAMP,
-                            "last_active_ts": firestore.SERVER_TIMESTAMP # 활동 시작점
+                            "last_active_ts": firestore.SERVER_TIMESTAMP
                         })
                         clean_inactive_users()
                         st.session_state.logged_in = True
@@ -185,6 +181,34 @@ if not st.session_state.logged_in:
                         st.rerun()
                     else: st.error("정보가 틀립니다.")
 
+        # [NEW] 익명 입장 버튼 (로그인 탭 하단)
+        st.markdown("---")
+        if st.button("🕵️ 익명으로 바로 입장하기", type="primary", use_container_width=True):
+            # 익명 계정 생성 (guest_랜덤ID)
+            random_suffix = str(uuid.uuid4())[:6]
+            guest_id = f"guest_{random_suffix}"
+            guest_nick = f"익명_{random_suffix}"
+            
+            # DB에 게스트 정보 저장 (그래야 관리자가 시간제한 걸 수 있음)
+            users_ref.document(guest_id).set({
+                "password": "GUEST_NO_PASSWORD", # 비밀번호 없음
+                "nickname": guest_nick,
+                "last_login": firestore.SERVER_TIMESTAMP,
+                "last_active_ts": firestore.SERVER_TIMESTAMP,
+                "daily_limit": 0, # 무제한 기본
+                "used_minutes": 0,
+                "last_date_str": datetime.now(KST).strftime("%Y-%m-%d"),
+                "is_guest": True # 게스트 표시
+            })
+            
+            st.session_state.logged_in = True
+            st.session_state.user_id = guest_id
+            st.session_state.user_nickname = guest_nick
+            st.session_state.is_super_admin = False
+            st.success(f"임시 닉네임 '{guest_nick}'으로 입장합니다.")
+            time.sleep(0.5)
+            st.rerun()
+
     with tab2:
         st.subheader("회원가입")
         new_id = st.text_input("아이디", key="new_id")
@@ -192,6 +216,7 @@ if not st.session_state.logged_in:
         new_nick = st.text_input("닉네임", key="new_nick")
         if st.button("회원가입"):
             if new_id.lower() == "admin": st.error("이 아이디는 사용할 수 없습니다.")
+            elif new_id.startswith("guest_"): st.error("guest_로 시작하는 아이디는 만들 수 없습니다.")
             elif len(new_pw) < 4 or not (re.search("[a-zA-Z]", new_pw) and re.search("[0-9]", new_pw)):
                 st.error("비밀번호 조건을 확인해주세요.")
             elif users_ref.document(new_id).get().exists: st.error("이미 있는 아이디입니다.")
@@ -200,7 +225,7 @@ if not st.session_state.logged_in:
                     "password": hash_password(new_pw),
                     "nickname": new_nick,
                     "last_login": firestore.SERVER_TIMESTAMP,
-                    "daily_limit": DEFAULT_DAILY_LIMIT, # 기본 제한시간
+                    "daily_limit": 0, # 무제한 기본
                     "used_minutes": 0,
                     "last_date_str": datetime.now(KST).strftime("%Y-%m-%d")
                 })
@@ -210,21 +235,19 @@ if not st.session_state.logged_in:
 # [B] 로그인 성공 후
 # ==========================================
 else:
-    # 시스템 설정
     sys_config = get_system_config()
     is_chat_locked = sys_config.get("is_locked", False)
     banned_words = sys_config.get("banned_words", "")
 
-    # [NEW] 시간 제한 체크 (관리자 제외)
     is_allowed = True
     used_min = 0
-    limit_min = DEFAULT_DAILY_LIMIT
+    limit_min = 0
     
     if not st.session_state.is_super_admin:
         is_allowed, used_min, limit_min = check_time_limit(st.session_state.user_id)
 
     # ----------------------------------------------------
-    # [B-1] 관리자 전용 화면 (노란 배경)
+    # [B-1] 관리자 전용 화면
     # ----------------------------------------------------
     if st.session_state.is_super_admin:
         st.markdown("""
@@ -256,14 +279,13 @@ else:
             c2.metric("총 메시지", f"{len(all_chats)}개")
 
         with admin_tab2:
-            st.subheader("회원 목록 및 시간 제한 설정")
+            st.subheader("회원 목록 및 시간 제한 (0=무제한)")
             if all_users:
-                # 헤더
                 c1, c2, c3, c4, c5, c6 = st.columns([1.5, 1.5, 1.5, 1.5, 1, 1])
                 c1.markdown("**ID**")
                 c2.markdown("**닉네임**")
-                c3.markdown("**사용/제한(분)**")
-                c4.markdown("**제한 설정**")
+                c3.markdown("**사용 / 제한**")
+                c4.markdown("**제한(분) 설정**")
                 c5.markdown("**적용**")
                 c6.markdown("**관리**")
                 st.divider()
@@ -272,26 +294,29 @@ else:
                     u_data = user.to_dict()
                     u_id = user.id
                     u_nick = u_data.get("nickname", "-")
-                    u_limit = u_data.get("daily_limit", DEFAULT_DAILY_LIMIT)
+                    u_limit = u_data.get("daily_limit", 0) # 기본 0
                     u_used = u_data.get("used_minutes", 0)
                     
                     cc1, cc2, cc3, cc4, cc5, cc6 = st.columns([1.5, 1.5, 1.5, 1.5, 1, 1])
                     cc1.text(u_id)
                     cc2.text(u_nick)
                     
-                    # 사용량 표시 (빨간색이면 초과)
-                    usage_text = f"{int(u_used)} / {u_limit}분"
-                    if u_used > u_limit:
+                    # 사용량 텍스트
+                    limit_str = "무제한" if u_limit == 0 else f"{u_limit}분"
+                    usage_text = f"{int(u_used)}분 / {limit_str}"
+                    
+                    # 초과 시 빨간색
+                    if u_limit > 0 and u_used > u_limit:
                         cc3.error(usage_text)
                     else:
                         cc3.text(usage_text)
                     
-                    # [NEW] 시간 제한 설정
-                    new_limit = cc4.number_input("limit", min_value=1, value=u_limit, key=f"limit_{u_id}", label_visibility="collapsed")
+                    # 제한 설정 입력 (0 = 무제한)
+                    new_limit = cc4.number_input("limit", min_value=0, value=u_limit, key=f"limit_{u_id}", label_visibility="collapsed")
                     
                     if cc5.button("저장", key=f"save_{u_id}"):
                         users_ref.document(u_id).update({"daily_limit": new_limit})
-                        st.toast(f"{u_nick}님 제한시간: {new_limit}분으로 설정")
+                        st.toast(f"설정 완료: {new_limit}분 (0=무제한)")
                         time.sleep(1)
                         st.rerun()
                     
@@ -365,19 +390,16 @@ else:
     # [B-2] 일반 사용자 화면
     # ----------------------------------------------------
     else:
-        # [NEW] 이용 시간 초과 체크
+        # 시간 초과 체크
         if not is_allowed:
             st.error("⏳ 일일 이용 시간이 초과되었습니다.")
-            st.info(f"오늘은 {used_min}분을 사용하셨습니다. (제한: {limit_min}분)")
+            st.info(f"오늘은 {used_min}분을 사용하셨습니다.")
             st.warning("내일 다시 접속해주세요!")
-            
-            # 로그아웃 버튼만 제공
             if st.button("🚪 로그아웃"):
                 st.session_state.logged_in = False
                 st.rerun()
-            st.stop() # 코드 실행 중단
+            st.stop()
 
-        # 우측 상단 고정 버튼 (기존 코드 유지)
         components.html("""
             <script>
                 function fixButtonPosition() {
@@ -409,13 +431,15 @@ else:
         if st.button("🔄 채팅 새로고침"):
             st.rerun()
 
-        # 사이드바
         with st.sidebar:
             st.header(f"👤 {st.session_state.user_nickname}님")
             
-            # [NEW] 남은 시간 표시
-            st.info(f"⏳ 오늘 사용: {used_min}분 / {limit_min}분")
-            
+            # 남은 시간 표시
+            if limit_min == 0:
+                st.info(f"⏳ 사용: {used_min}분 (무제한)")
+            else:
+                st.info(f"⏳ 사용: {used_min}분 / {limit_min}분")
+                
             with st.expander("닉네임 변경"):
                 change_nick = st.text_input("새 닉네임", value=st.session_state.user_nickname)
                 if st.button("저장"):
@@ -433,7 +457,6 @@ else:
             st.divider()
             st.caption("문의사항은 관리자에게 연락.")
 
-        # 메인 채팅창
         st.title("💬 정동고 익명 채팅방")
         
         if is_chat_locked:
