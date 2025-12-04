@@ -85,7 +85,7 @@ db = firestore.client()
 users_ref = db.collection("users")
 chat_ref = db.collection("global_chat")
 system_ref = db.collection("system")
-inquiry_ref = db.collection("inquiries") # [추가] 문의 저장소
+inquiry_ref = db.collection("inquiries")
 
 # --- 5. 세션 초기화 ---
 if "logged_in" not in st.session_state: st.session_state.logged_in = False
@@ -116,9 +116,6 @@ if not st.session_state.logged_in:
                         st.session_state.user_id = "ADMIN_ACCOUNT"
                         st.session_state.user_nickname = "관리자"
                         st.session_state.is_super_admin = True
-                        
-                        # [변경] 관리자 입장 메시지 코드 삭제됨 (조용히 입장)
-                        
                         st.success("관리자 모드로 접속합니다.")
                         time.sleep(0.5)
                         st.rerun()
@@ -135,7 +132,6 @@ if not st.session_state.logged_in:
                         st.session_state.user_nickname = user_nick
                         st.session_state.is_super_admin = False
                         
-                        # 일반 유저는 입장 메시지 뜸
                         chat_ref.add({
                             "user_id": "SYSTEM_ENTRY",
                             "related_user_id": login_id,
@@ -146,7 +142,6 @@ if not st.session_state.logged_in:
                             "color": "#808080"
                         })
                         maintain_chat_history()
-
                         st.rerun()
                     else: st.error("정보가 틀립니다.")
 
@@ -160,7 +155,7 @@ if not st.session_state.logged_in:
                 "password": "GUEST_NO_PASSWORD",
                 "nickname": guest_nick,
                 "last_login": firestore.SERVER_TIMESTAMP,
-                "is_guest": True
+                "is_guest": True # 익명 여부 표시
             })
             
             st.session_state.logged_in = True
@@ -237,7 +232,6 @@ else:
 
         st.title("🛡️ 관리자 통제 센터")
         
-        # [추가] "📩 문의함" 탭 추가
         admin_tab1, admin_tab2, admin_tab3, admin_tab4, admin_tab5 = st.tabs(["📊 통계", "👥 회원 관리", "📢 모니터링", "⚙️ 시스템 설정", "📩 문의함"])
         
         with admin_tab1:
@@ -248,7 +242,27 @@ else:
             c2.metric("총 메시지", f"{len(all_chats)}개")
 
         with admin_tab2:
-            st.subheader("회원 목록 및 닉네임 강제 변경")
+            st.subheader("회원 목록 및 관리")
+            
+            # [추가] 유령 익명 계정 정리 버튼
+            st.info("💡 로그아웃을 안 하고 창을 닫은 익명 유저들이 목록에 남을 수 있습니다.")
+            if st.button("🧹 24시간 지난 익명 유령 계정 삭제"):
+                deleted_count = 0
+                cutoff = datetime.now(timezone.utc) - timedelta(days=1)
+                # 인덱스 없이 하기 위해 스트림 후 필터링 (데이터 많으면 인덱스 필요)
+                guests = users_ref.where("is_guest", "==", True).stream()
+                for g in guests:
+                    g_data = g.to_dict()
+                    last_login = g_data.get("last_login")
+                    if last_login and last_login < cutoff:
+                        g.reference.delete()
+                        deleted_count += 1
+                st.success(f"{deleted_count}개의 유령 계정을 삭제했습니다.")
+                time.sleep(1)
+                st.rerun()
+
+            st.divider()
+            
             if all_users:
                 c1, c2, c3, c4 = st.columns([1.5, 1.5, 2, 1.5])
                 c1.markdown("**ID**")
@@ -271,14 +285,11 @@ else:
                         if new_admin_nick != u_nick:
                             if st.button("변경 적용", key=f"btn_adn_{u_id}"):
                                 users_ref.document(u_id).update({"nickname": new_admin_nick})
-                                
                                 u_msgs = chat_ref.where("user_id", "==", u_id).stream()
                                 for m in u_msgs: m.reference.update({"name": new_admin_nick})
-                                
                                 sys_msgs = chat_ref.where("related_user_id", "==", u_id).stream()
                                 for s in sys_msgs:
                                     s.reference.update({"message": f"👋 {new_admin_nick}님이 입장했습니다."})
-                                    
                                 st.toast(f"{u_nick} -> {new_admin_nick} 변경 완료")
                                 time.sleep(1)
                                 st.rerun()
@@ -359,12 +370,9 @@ else:
                 time.sleep(1)
                 st.rerun()
 
-        # [추가] 문의함 탭 구현
         with admin_tab5:
             st.subheader("📩 받은 문의함")
-            # 최신순 정렬
             inquiries = inquiry_ref.order_by("timestamp", direction=firestore.Query.DESCENDING).stream()
-            
             count = 0
             for iq in inquiries:
                 count += 1
@@ -383,7 +391,6 @@ else:
                         if st.button("처리(삭제)", key=f"del_iq_{iq_id}"):
                             inquiry_ref.document(iq_id).delete()
                             st.rerun()
-            
             if count == 0:
                 st.info("도착한 문의가 없습니다.")
 
@@ -428,13 +435,12 @@ else:
             st.divider()
             st.subheader("🎨 프로필 색상")
             chosen_color = st.color_picker("색상 선택", st.session_state.user_color)
-            
             if chosen_color != st.session_state.user_color:
                 st.session_state.user_color = chosen_color
                 my_docs = chat_ref.where("user_id", "==", st.session_state.user_id).stream()
                 for doc in my_docs:
                     doc.reference.update({"color": chosen_color})
-                st.toast("🎨 모든 채팅 기록의 색상이 변경되었습니다!")
+                st.toast("모든 채팅 기록의 색상이 변경되었습니다.")
                 time.sleep(0.5)
                 st.rerun()
             st.divider()
@@ -459,13 +465,11 @@ else:
                                                    .stream()
                                 for s_msg in sys_msgs:
                                     s_msg.reference.update({"message": f"👋 {clean_nick}님이 입장했습니다."})
-
                                 st.session_state.user_nickname = clean_nick
-                                st.toast("닉네임 변경 완료! 입장 알림도 수정되었습니다.")
+                                st.toast("닉네임 변경 완료.")
                                 time.sleep(1)
                                 st.rerun()
-                                
-            # [추가] 관리자 문의 기능 (사용자 사이드바)
+            
             st.divider()
             with st.expander("관리자에게 문의하기"):
                 inquiry_text = st.text_area("문의 내용 입력", height=100)
@@ -478,13 +482,19 @@ else:
                             "timestamp": firestore.SERVER_TIMESTAMP,
                             "is_read": False
                         })
-                        st.toast("문의가 전송되었습니다!")
+                        st.toast("문의가 전송되었습니다.")
                         time.sleep(1)
                     else:
                         st.warning("내용을 입력해주세요.")
 
             st.divider()
+            
+            # [수정] 로그아웃 버튼 (익명일 경우 회원 탈퇴 처리)
             if st.button("🚪 로그아웃"):
+                # guest_로 시작하는 아이디는 DB에서 삭제
+                if st.session_state.user_id.startswith("guest_"):
+                    users_ref.document(st.session_state.user_id).delete()
+                
                 st.session_state.logged_in = False
                 st.rerun()
             st.caption("문의사항은 위 '관리자에게 문의하기'를 이용해주세요.")
