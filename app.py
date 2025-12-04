@@ -138,7 +138,6 @@ else:
     # [B-1] 관리자 전용 화면
     # ----------------------------------------------------
     if st.session_state.is_super_admin:
-        # 배경 노란색
         st.markdown("""
             <style>
             [data-testid="stAppViewContainer"] { background-color: #FFF9C4; }
@@ -238,37 +237,47 @@ else:
     # [B-2] 일반 사용자 화면
     # ----------------------------------------------------
     else:
-        # [핵심] 새로고침 버튼 우측 하단 고정
+        # [혁신적인 수정] :has() 선택자를 사용하여 버튼을 완벽하게 찾아냄
         st.markdown("""
             <style>
-            .fixed-refresh-btn-marker {
+            /* 1. 마커가 포함된 컨테이너를 찾아서 숨김 */
+            div[data-testid="stMarkdownContainer"]:has(span.refresh-marker) {
                 display: none;
             }
-            .fixed-refresh-btn-marker + div button {
+
+            /* 2. 마커 바로 다음에 오는 버튼 컨테이너를 찾아서 스타일 강제 적용 */
+            div[data-testid="stMarkdownContainer"]:has(span.refresh-marker) + div[data-testid="stButton"] button {
                 position: fixed !important;
-                bottom: 90px !important;    /* 바닥에서 90px 위 (채팅창 바로 위) */
-                right: 20px !important;     /* 오른쪽 벽에서 20px */
-                left: auto !important;      /* 왼쪽 붙음 방지 */
-                width: auto !important;     /* 버튼 너비 자동 */
-                z-index: 999999 !important;
-                background-color: white;
-                color: #FF4B4B;
-                border: 1px solid #FF4B4B;
-                box-shadow: 0px 4px 6px rgba(0,0,0,0.1);
-                border-radius: 20px;
-                font-weight: bold;
-                padding: 0.5rem 1rem !important;
+                bottom: 100px !important;    /* 바닥에서 적당히 띄움 (입력창 위) */
+                right: 25px !important;      /* 오른쪽 벽에서 띄움 */
+                left: auto !important;       /* 왼쪽 쏠림 절대 방지 */
+                width: auto !important;      /* 너비를 글자 크기에 맞춤 (중요!) */
+                z-index: 999999 !important;  /* 맨 위에 표시 */
+                
+                /* 디자인 예쁘게 */
+                background-color: white !important;
+                color: #FF4B4B !important;
+                border: 2px solid #FF4B4B !important;
+                border-radius: 25px !important;
+                box-shadow: 0px 4px 12px rgba(0,0,0,0.15) !important;
+                font-weight: 900 !important;
+                padding: 0.5rem 1.2rem !important;
             }
-            .fixed-refresh-btn-marker + div button:hover {
+
+            /* 3. 호버 효과 */
+            div[data-testid="stMarkdownContainer"]:has(span.refresh-marker) + div[data-testid="stButton"] button:hover {
                 background-color: #FF4B4B !important;
                 color: white !important;
+                transform: scale(1.05);
+                transition: all 0.2s ease;
             }
             </style>
-            <div class="fixed-refresh-btn-marker"></div>
+            
+            <span class="refresh-marker"></span>
             """, unsafe_allow_html=True)
             
-        # 이 버튼은 위 CSS에 의해 우측 하단에 고정됩니다.
-        if st.button("🔄 채팅 새로고침"):
+        # 이 버튼은 바로 위의 CSS에 의해 낚아채져서 오른쪽 아래로 이동합니다.
+        if st.button("🔄 채팅 새로고침", key="fixed_refresh_btn"):
             st.rerun()
 
         # 사이드바
@@ -315,7 +324,6 @@ else:
             # 2. 내 메시지
             elif msg_id == st.session_state.user_id:
                 with st.chat_message("user"):
-                    # 메시지와 삭제 버튼을 나란히 배치 (비율 9:1)
                     col_msg, col_del = st.columns([9, 1])
                     with col_msg:
                         if is_deleted:
@@ -323,7 +331,6 @@ else:
                         else:
                             st.markdown(f"{msg_text}")
                         st.caption(f"{msg_time}")
-                    
                     with col_del:
                         if not is_deleted:
                             if st.button("🗑️", key=f"my_del_{doc_id}", help="이 글 삭제"):
@@ -332,7 +339,7 @@ else:
                                     "is_deleted": True
                                 })
                                 st.rerun()
-            
+
             # 3. 남 메시지
             else:
                 with st.chat_message(msg_name, avatar=get_custom_avatar(msg_id)):
