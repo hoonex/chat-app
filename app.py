@@ -1,20 +1,25 @@
 import streamlit as st
 import firebase_admin
-from firebase_admin import credentials
-from firebase_admin import firestore
+from firebase_admin import credentials, firestore
 import time
-import uuid
 import hashlib
 import base64
+import re
 
 # --- 1. 페이지 설정 ---
 st.set_page_config(page_title="실시간 채팅", page_icon="💬")
 
-# --- 2. 아바타 생성 함수 (색상 유지용) ---
+# --- 2. 유틸리티 함수들 ---
+
+# (1) 비밀번호 암호화
+def hash_password(password):
+    return hashlib.sha256(password.encode()).hexdigest()
+
+# (2) 아바타 생성 (ID 기반 고유 색상)
 def get_custom_avatar(user_id):
     hash_object = hashlib.md5(user_id.encode())
     hex_dig = hash_object.hexdigest()
-    color_hex = hex_dig[:6] 
+    color_hex = hex_dig[:6]
     
     svg_code = f"""
     <svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100">
@@ -36,135 +41,162 @@ if not firebase_admin._apps:
         st.stop()
 
 db = firestore.client()
-chat_ref = db.collection("global_chat")
+users_ref = db.collection("users")       # 회원 정보
+chat_ref = db.collection("global_chat")  # 채팅 내용
 
-# --- 4. 사이드바 (계정 설정) ---
-with st.sidebar:
-    st.header("👤 계정 설정")
+# --- 4. 세션 상태 초기화 ---
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+if "user_id" not in st.session_state:
+    st.session_state.user_id = ""
+if "user_nickname" not in st.session_state:
+    st.session_state.user_nickname = ""
+
+# ==========================================
+# [A] 로그인 전 화면 (로그인 / 회원가입)
+# ==========================================
+if not st.session_state.logged_in:
+    st.title("🔒 입장하기")
     
-    # ID 생성
-    if "user_id" not in st.session_state:
-        st.session_state.user_id = str(uuid.uuid4())
+    tab1, tab2 = st.tabs(["로그인", "회원가입"])
     
-    # ID 복구용 입력창
-    input_id = st.text_input("고유 ID (복구용)", value=st.session_state.user_id)
-    
-    # 로그인 버튼
-    if st.button("🆔 이 ID로 로그인"):
-        st.session_state.user_id = input_id.strip()
+    # --- 탭 1: 로그인 ---
+    with tab1:
+        st.subheader("로그인")
+        login_id = st.text_input("아이디", key="login_id")
+        login_pw = st.text_input("비밀번호", type="password", key="login_pw")
         
-        # 최근 닉네임 찾기 로직 (에러 방지용으로 파이썬 처리)
-        docs = chat_ref.where("user_id", "==", st.session_state.user_id).stream()
-        found_name = None
-        latest_time = None
+        if st.button("로그인 하기"):
+            if not login_id or not login_pw:
+                st.warning("아이디와 비밀번호를 입력하세요.")
+            else:
+                doc = users_ref.document(login_id).get()
+                if doc.exists:
+                    user_data = doc.to_dict()
+                    if user_data['password'] == hash_password(login_pw):
+                        st.session_state.logged_in = True
+                        st.session_state.user_id = login_id
+                        st.session_state.user_nickname = user_data['nickname']
+                        st.success(f"{user_data['nickname']}님 환영합니다!")
+                        time.sleep(0.5)
+                        st.rerun()
+                    else:
+                        st.error("비밀번호가 틀렸습니다.")
+                else:
+                    st.error("존재하지 않는 아이디입니다.")
 
-        for doc in docs:
-            data = doc.to_dict()
-            msg_time = data.get("timestamp")
-            if latest_time is None or (msg_time and msg_time > latest_time):
-                latest_time = msg_time
-                found_name = data.get("name")
+    # --- 탭 2: 회원가입 ---
+    with tab2:
+        st.subheader("새 계정 만들기")
+        
+        # [수정됨] 아이디는 자유롭게, 비밀번호에 조건을 명시
+        new_id = st.text_input("아이디 (자유롭게 입력)", key="new_id")
+        new_pw = st.text_input("비밀번호 (영문+숫자 4자 이상)", type="password", key="new_pw")
+        new_nick = st.text_input("사용할 닉네임", key="new_nick")
+        
+        if st.button("회원가입"):
+            # 1. 아이디 검사 (빈칸만 아니면 됨)
+            if not new_id:
+                st.error("아이디를 입력해주세요.")
             
-        if found_name:
-            st.session_state.user_nickname = found_name
-            st.success(f"'{found_name}'님 환영합니다!")
-            time.sleep(1)
+            # 2. 비밀번호 검사 (깐깐하게!)
+            elif len(new_pw) < 4:
+                st.error("비밀번호는 최소 4글자 이상이어야 합니다.")
+            elif not re.search("[a-zA-Z]", new_pw) or not re.search("[0-9]", new_pw):
+                st.error("비밀번호는 영문자와 숫자를 꼭 섞어서 만들어주세요. (보안 강화)")
+            
+            # 3. 닉네임 검사
+            elif not new_nick:
+                st.error("닉네임을 입력해주세요.")
+            
+            # 4. 중복 아이디 확인 및 가입
+            else:
+                if users_ref.document(new_id).get().exists:
+                    st.error("이미 사용 중인 아이디입니다. 다른 걸 써주세요.")
+                else:
+                    users_ref.document(new_id).set({
+                        "password": hash_password(new_pw),
+                        "nickname": new_nick
+                    })
+                    st.success("회원가입 성공! 로그인 탭에서 로그인해주세요.")
+
+# ==========================================
+# [B] 로그인 후 화면 (채팅방)
+# ==========================================
+else:
+    # --- 사이드바 ---
+    with st.sidebar:
+        st.header(f"👤 {st.session_state.user_nickname}님")
+        st.caption(f"ID: {st.session_state.user_id}")
+        st.divider()
+        
+        # 닉네임 변경
+        st.subheader("닉네임 변경")
+        change_nick = st.text_input("새 닉네임", value=st.session_state.user_nickname)
+        
+        if st.button("변경 저장"):
+            if change_nick != st.session_state.user_nickname:
+                clean_nick = change_nick.strip()
+                if clean_nick:
+                    with st.spinner("업데이트 중..."):
+                        users_ref.document(st.session_state.user_id).update({"nickname": clean_nick})
+                        my_msgs = chat_ref.where("user_id", "==", st.session_state.user_id).stream()
+                        for msg in my_msgs:
+                            msg.reference.update({"name": clean_nick})
+                        st.session_state.user_nickname = clean_nick
+                        st.success("완료!")
+                        time.sleep(1)
+                        st.rerun()
+        
+        st.divider()
+        if st.button("🚪 로그아웃"):
+            st.session_state.logged_in = False
             st.rerun()
-        else:
-            st.warning("이 ID의 기록이 없습니다. (새 계정)")
 
-    st.divider()
+        st.divider()
+        with st.expander("🛠 관리자 메뉴"):
+            admin_pw = st.text_input("관리자 암호", type="password")
+            if st.button("채팅방 초기화"):
+                if "admin_password" in st.secrets and admin_pw == st.secrets["admin_password"]:
+                    docs = chat_ref.stream()
+                    for doc in docs:
+                        doc.reference.delete()
+                    st.success("초기화 완료")
+                    time.sleep(1)
+                    st.rerun()
+                else:
+                    st.error("암호 오류")
 
-    # 닉네임 설정 초기값
-    if "user_nickname" not in st.session_state:
-        st.session_state.user_nickname = "익명"
-
-    # [핵심 수정] 닉네임을 입력받고, 변경되었는지 확인합니다.
-    new_nickname = st.text_input("닉네임", value=st.session_state.user_nickname)
+    # --- 메인 채팅창 ---
+    st.title("💬 정동고 익명 채팅방")
     
-    # 만약 입력한 닉네임이 기존과 다르다면? (이름을 바꿨다면)
-    if new_nickname != st.session_state.user_nickname:
-        # 1. 일단 세션에 저장
-        st.session_state.user_nickname = new_nickname
-        MY_NAME = new_nickname.strip()
-        if not MY_NAME: MY_NAME = "익명"
-
-        # 2. [과거 기록 수정] DB에서 내 ID로 쓴 글을 전부 찾아서 이름을 업데이트
-        with st.spinner(f"과거 채팅 기록의 이름을 '{MY_NAME}'(으)로 변경 중..."):
-            my_docs = chat_ref.where("user_id", "==", st.session_state.user_id).stream()
-            for doc in my_docs:
-                doc.reference.update({"name": MY_NAME})
+    docs = chat_ref.order_by("timestamp").stream()
+    chat_exists = False
+    
+    for doc in docs:
+        chat_exists = True
+        data = doc.to_dict()
+        msg_sender_id = data.get("user_id")
+        msg_name = data.get("name")
+        msg_text = data.get("message")
         
-        st.success("닉네임 변경 완료! 모든 기록이 업데이트되었습니다.")
-        time.sleep(1)
-        st.rerun()
-
-    # 현재 확정된 이름
-    MY_NAME = st.session_state.user_nickname.strip()
-    if not MY_NAME:
-        MY_NAME = "익명"
-    
-    st.caption(f"ID: ...{st.session_state.user_id[-6:]}")
-    st.divider()
-    
-    st.header("🛠 관리자 메뉴")
-    admin_input = st.text_input("관리자 암호", type="password", key="admin_pwd")
-    
-    if st.button("🗑️ 채팅 기록 삭제"):
-        if "admin_password" in st.secrets and admin_input == st.secrets["admin_password"]:
-            with st.spinner("청소 중..."):
-                docs = chat_ref.stream()
-                for doc in docs:
-                    doc.reference.delete()
-            st.success("초기화 완료!")
-            time.sleep(1)
-            st.rerun()
+        if msg_sender_id == st.session_state.user_id:
+            with st.chat_message("user"):
+                st.write(msg_text)
         else:
-            st.error("암호가 틀렸습니다!")
-            
-    st.divider()
-    if st.button("🔄 새로고침"):
-        st.rerun()
-
-# --- 5. 메인 채팅 화면 ---
-st.title("💬 정동고 익명 채팅방")
-
-# 메시지 가져오기
-docs = chat_ref.order_by("timestamp").stream()
-chat_exists = False
-
-for doc in docs:
-    chat_exists = True
-    data = doc.to_dict()
-    
-    sender_name = str(data.get("name", "알 수 없음"))
-    message_text = data.get("message", "")
-    sender_id = data.get("user_id", "")
-    
-    # 1. 내 글 (오른쪽)
-    if sender_id == st.session_state.user_id:
-        with st.chat_message("user"):
-            st.write(message_text)
-            
-    # 2. 남의 글 (왼쪽)
-    else:
-        # 색상은 ID 기준(sender_id)이므로 이름 바꿔도 색은 유지됨!
-        seed = sender_id if sender_id else sender_name
-        custom_icon_url = get_custom_avatar(seed)
+            custom_avatar = get_custom_avatar(msg_sender_id)
+            with st.chat_message(msg_name, avatar=custom_avatar):
+                st.markdown(f"**{msg_name}**")
+                st.write(msg_text)
+                
+    if not chat_exists:
+        st.info("대화가 없습니다. 첫 메시지를 보내보세요!")
         
-        with st.chat_message(sender_name, avatar=custom_icon_url):
-            st.markdown(f"**{sender_name}**")
-            st.write(message_text)
-
-if not chat_exists:
-    st.info("첫 메시지를 남겨보세요!")
-
-# --- 6. 메시지 전송 ---
-if prompt := st.chat_input("메시지 입력..."):
-    chat_ref.add({
-        "name": MY_NAME,
-        "message": prompt,
-        "user_id": st.session_state.user_id,
-        "timestamp": firestore.SERVER_TIMESTAMP
-    })
-    st.rerun()
+    if prompt := st.chat_input("메시지 입력..."):
+        chat_ref.add({
+            "user_id": st.session_state.user_id,
+            "name": st.session_state.user_nickname,
+            "message": prompt,
+            "timestamp": firestore.SERVER_TIMESTAMP
+        })
+        st.rerun()
