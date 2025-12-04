@@ -55,18 +55,17 @@ def format_time_kst(timestamp):
     dt_kst = timestamp.astimezone(KST)
     return dt_kst.strftime("%p %I:%M").replace("AM", "오전").replace("PM", "오후")
 
-# [NEW] 시스템 설정(잠금여부, 금칙어) 가져오기
+# 시스템 설정 가져오기
 def get_system_config():
     doc = system_ref.document("config").get()
     if doc.exists:
         return doc.to_dict()
     else:
-        # 기본값 설정
         default_config = {"is_locked": False, "banned_words": ""}
         system_ref.document("config").set(default_config)
         return default_config
 
-# [NEW] 욕설 필터링 함수
+# 욕설 필터링
 def filter_message(text, banned_words_str):
     if not banned_words_str:
         return text
@@ -89,7 +88,7 @@ if not firebase_admin._apps:
 db = firestore.client()
 users_ref = db.collection("users")
 chat_ref = db.collection("global_chat")
-system_ref = db.collection("system") # [NEW] 시스템 설정 저장소
+system_ref = db.collection("system")
 
 # --- 5. 세션 초기화 ---
 if "logged_in" not in st.session_state: st.session_state.logged_in = False
@@ -175,6 +174,13 @@ else:
             """, unsafe_allow_html=True)
 
         st.sidebar.header("🛡️ 관리자 메뉴")
+        
+        # [NEW] 관리자 전용 심플 새로고침 버튼
+        if st.sidebar.button("🔄 관리자 페이지 새로고침"):
+            st.rerun()
+            
+        st.sidebar.divider()
+        
         if st.sidebar.button("🚪 관리자 로그아웃"):
             st.session_state.logged_in = False
             st.session_state.is_super_admin = False
@@ -182,7 +188,6 @@ else:
 
         st.title("🛡️ 관리자 통제 센터")
         
-        # [NEW] 탭 4개로 확장
         admin_tab1, admin_tab2, admin_tab3, admin_tab4 = st.tabs(["📊 통계", "👥 회원 관리", "📢 모니터링", "⚙️ 시스템 설정"])
         
         with admin_tab1:
@@ -276,35 +281,24 @@ else:
                     maintain_chat_history()
                     st.rerun()
 
-        # [NEW] 4번째 탭: 시스템 설정
         with admin_tab4:
             st.subheader("⚙️ 시스템 설정")
-            st.info("채팅방의 상태를 제어하거나 금칙어를 설정합니다.")
             
-            # 1. 채팅방 얼리기
-            st.markdown("### 1. 채팅방 얼리기 (Chat Lock)")
-            lock_status = st.toggle("채팅방 얼리기 (모든 사용자 입력 차단)", value=is_chat_locked)
-            
+            st.markdown("### 1. 채팅방 얼리기")
+            lock_status = st.toggle("채팅방 얼리기 (사용자 입력 차단)", value=is_chat_locked)
             if lock_status != is_chat_locked:
                 system_ref.document("config").update({"is_locked": lock_status})
-                if lock_status:
-                    st.error("🔒 채팅방이 얼었습니다! 이제 관리자만 말할 수 있습니다.")
-                else:
-                    st.success("🔓 채팅방 녹음! 다시 대화가 가능합니다.")
-                time.sleep(1)
                 st.rerun()
             
             st.divider()
             
-            # 2. 금칙어 설정
-            st.markdown("### 2. 금칙어 관리 (Banned Words)")
-            st.caption("쉼표(,)로 구분해서 입력하세요. 예: 바보,멍청이,나쁜말")
-            
-            new_banned_words = st.text_area("금칙어 목록", value=banned_words, height=100)
+            st.markdown("### 2. 금칙어 관리")
+            st.caption("쉼표(,)로 구분해서 입력하세요.")
+            new_banned_words = st.text_area("금칙어 목록", value=banned_words, height=150)
             
             if st.button("금칙어 저장"):
                 system_ref.document("config").update({"banned_words": new_banned_words})
-                st.success("금칙어 목록이 업데이트되었습니다.")
+                st.success("저장되었습니다.")
                 time.sleep(1)
                 st.rerun()
 
@@ -312,7 +306,7 @@ else:
     # [B-2] 일반 사용자 화면
     # ----------------------------------------------------
     else:
-        # 우측 상단 고정 버튼
+        # 우측 상단 고정 버튼 (일반 사용자용)
         components.html("""
             <script>
                 function fixButtonPosition() {
@@ -367,9 +361,8 @@ else:
         # 메인 채팅창
         st.title("💬 정동고 익명 채팅방")
         
-        # [NEW] 채팅방 잠금 상태 표시
         if is_chat_locked:
-            st.error("🔒 현재 관리자가 채팅방을 얼렸습니다. 메시지를 보낼 수 없습니다.")
+            st.error("🔒 현재 관리자가 채팅방을 얼렸습니다.")
 
         docs = chat_ref.order_by("timestamp").stream()
         chat_exists = False
@@ -384,60 +377,47 @@ else:
             msg_time = format_time_kst(data.get("timestamp"))
             is_deleted = data.get("is_deleted", False)
             
-            # 삭제된 글
             if is_deleted:
                 if msg_id == "ADMIN_ACCOUNT":
                     display_text = "🚫 관리자에 의해 삭제된 공지입니다."
                 elif msg_text == "🚫 관리자에 의해 삭제된 글입니다.":
                     display_text = "🚫 관리자에 의해 삭제된 글입니다."
                 else:
-                    display_text = f"🗑️ {msg_name}님이 삭제한 글입니다." # 닉네임 연동됨
+                    display_text = f"🗑️ {msg_name}님이 삭제한 글입니다."
                 
                 text_html = f"""<div style='color:#888;font-style:italic;'>{display_text}</div>
                                 <div style='display:block;text-align:right;font-size:0.7em;color:grey;'>{msg_time}</div>"""
             else:
                 text_html = f"""{msg_text}<div style='display:block;text-align:right;font-size:0.7em;color:grey;'>{msg_time}</div>"""
             
-            # 1. 관리자 공지
             if msg_id == "ADMIN_ACCOUNT":
                 with st.chat_message("admin", avatar="📢"):
-                    if is_deleted:
-                        st.markdown(text_html, unsafe_allow_html=True)
-                    else:
-                        st.error(f"**[공지] {msg_text}**") 
+                    if is_deleted: st.markdown(text_html, unsafe_allow_html=True)
+                    else: st.error(f"**[공지] {msg_text}**") 
             
-            # 2. 내 메시지
             elif msg_id == st.session_state.user_id:
                 with st.chat_message("user"):
                     col_msg, col_del = st.columns([9, 1])
-                    with col_msg:
-                        st.markdown(text_html, unsafe_allow_html=True)
+                    with col_msg: st.markdown(text_html, unsafe_allow_html=True)
                     with col_del:
                         if not is_deleted:
                             if st.button("🗑️", key=f"my_del_{doc_id}", help="삭제"):
-                                chat_ref.document(doc_id).update({
-                                    "is_deleted": True
-                                })
+                                chat_ref.document(doc_id).update({"is_deleted": True})
                                 st.rerun()
 
-            # 3. 남 메시지
             else:
                 with st.chat_message(msg_name, avatar=get_custom_avatar(msg_id)):
-                    if not is_deleted:
-                        st.markdown(f"**{msg_name}**")
+                    if not is_deleted: st.markdown(f"**{msg_name}**")
                     st.markdown(text_html, unsafe_allow_html=True)
 
         if not chat_exists: st.info("대화가 없습니다.")
             
-        # [NEW] 메시지 입력창 (잠금 상태면 비활성화)
         if prompt := st.chat_input("메시지 입력...", disabled=is_chat_locked):
-            # [NEW] 금칙어 필터링 적용
             filtered_msg = filter_message(prompt, banned_words)
-            
             chat_ref.add({
                 "user_id": st.session_state.user_id,
                 "name": st.session_state.user_nickname,
-                "message": filtered_msg, # 필터링된 메시지 저장
+                "message": filtered_msg,
                 "timestamp": firestore.SERVER_TIMESTAMP,
                 "is_deleted": False
             })
