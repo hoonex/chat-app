@@ -20,10 +20,8 @@ def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
 def get_custom_avatar(user_id):
-    # 관리자일 경우 특별한 아이콘 리턴
     if user_id == "ADMIN_ACCOUNT":
         return "📢"
-        
     hash_object = hashlib.md5(user_id.encode())
     hex_dig = hash_object.hexdigest()
     color_hex = hex_dig[:6]
@@ -78,36 +76,30 @@ if "is_super_admin" not in st.session_state: st.session_state.is_super_admin = F
 
 
 # ==========================================
-# [A] 로그인 화면 (일반 / 관리자 분기점)
+# [A] 로그인 화면
 # ==========================================
 if not st.session_state.logged_in:
     st.title("정동고 익명 채팅방 입장하기")
-    
     tab1, tab2 = st.tabs(["로그인", "회원가입"])
     
     with tab1:
         st.subheader("로그인")
         login_id = st.text_input("아이디", key="login_id")
         login_pw = st.text_input("비밀번호", type="password", key="login_pw")
-        
         if st.button("로그인 하기"):
             if not login_id or not login_pw:
                 st.warning("입력해주세요.")
             else:
-                # [관리자 로그인 로직]
                 if login_id == "admin":
                     if "admin_password" in st.secrets and login_pw == st.secrets["admin_password"]:
                         st.session_state.logged_in = True
                         st.session_state.user_id = "ADMIN_ACCOUNT"
                         st.session_state.user_nickname = "관리자"
-                        st.session_state.is_super_admin = True # 관리자 플래그 ON
+                        st.session_state.is_super_admin = True
                         st.success("관리자 모드로 접속합니다.")
                         time.sleep(0.5)
                         st.rerun()
-                    else:
-                        st.error("관리자 비밀번호가 틀렸습니다.")
-                
-                # [일반 유저 로그인 로직]
+                    else: st.error("관리자 비밀번호가 틀렸습니다.")
                 else:
                     doc = users_ref.document(login_id).get()
                     if doc.exists and doc.to_dict()['password'] == hash_password(login_pw):
@@ -116,7 +108,7 @@ if not st.session_state.logged_in:
                         st.session_state.logged_in = True
                         st.session_state.user_id = login_id
                         st.session_state.user_nickname = doc.to_dict()['nickname']
-                        st.session_state.is_super_admin = False # 일반 유저
+                        st.session_state.is_super_admin = False
                         st.rerun()
                     else: st.error("정보가 틀립니다.")
 
@@ -126,12 +118,10 @@ if not st.session_state.logged_in:
         new_pw = st.text_input("비밀번호 (영문+숫자 4자 이상)", type="password", key="new_pw")
         new_nick = st.text_input("닉네임", key="new_nick")
         if st.button("회원가입"):
-            if new_id.lower() == "admin":
-                st.error("이 아이디는 사용할 수 없습니다.")
+            if new_id.lower() == "admin": st.error("이 아이디는 사용할 수 없습니다.")
             elif len(new_pw) < 4 or not (re.search("[a-zA-Z]", new_pw) and re.search("[0-9]", new_pw)):
                 st.error("비밀번호 조건을 확인해주세요.")
-            elif users_ref.document(new_id).get().exists:
-                st.error("이미 있는 아이디입니다.")
+            elif users_ref.document(new_id).get().exists: st.error("이미 있는 아이디입니다.")
             else:
                 users_ref.document(new_id).set({
                     "password": hash_password(new_pw),
@@ -145,30 +135,19 @@ if not st.session_state.logged_in:
 # ==========================================
 else:
     # ----------------------------------------------------
-    # [B-1] 관리자 전용 화면 (Super Admin)
+    # [B-1] 관리자 전용 화면
     # ----------------------------------------------------
     if st.session_state.is_super_admin:
-        # [배경 노랗게 만들기 CSS 주입]
-        st.markdown(
-            """
+        # 배경 노란색
+        st.markdown("""
             <style>
-            [data-testid="stAppViewContainer"] {
-                background-color: #FFF9C4;
-            }
-            [data-testid="stHeader"] {
-                background-color: #FFF9C4;
-            }
-            [data-testid="stSidebar"] {
-                background-color: #FFF59D;
-            }
+            [data-testid="stAppViewContainer"] { background-color: #FFF9C4; }
+            [data-testid="stHeader"] { background-color: #FFF9C4; }
+            [data-testid="stSidebar"] { background-color: #FFF59D; }
             </style>
-            """,
-            unsafe_allow_html=True
-        )
+            """, unsafe_allow_html=True)
 
         st.sidebar.header("🛡️ 관리자 메뉴")
-        st.sidebar.info("현재 'admin' 계정으로 접속 중입니다.")
-        
         if st.sidebar.button("🚪 관리자 로그아웃"):
             st.session_state.logged_in = False
             st.session_state.is_super_admin = False
@@ -176,106 +155,73 @@ else:
 
         st.title("🛡️ 관리자 통제 센터")
         
-        admin_tab1, admin_tab2, admin_tab3 = st.tabs(["📊 현황 통계", "👥 회원 관리", "📢 모니터링 & 공지"])
+        admin_tab1, admin_tab2, admin_tab3 = st.tabs(["📊 통계", "👥 회원 관리", "📢 모니터링"])
         
-        # --- 1. 통계 탭 ---
         with admin_tab1:
             all_users = list(users_ref.stream())
             all_chats = list(chat_ref.stream())
-            col1, col2 = st.columns(2)
-            col1.metric("총 회원 수", f"{len(all_users)}명")
-            col2.metric("누적 메시지 수", f"{len(all_chats)}개")
+            c1, c2 = st.columns(2)
+            c1.metric("총 회원", f"{len(all_users)}명")
+            c2.metric("총 메시지", f"{len(all_chats)}개")
 
-        # --- 2. 회원 관리 탭 (강제 닉네임 변경 추가) ---
         with admin_tab2:
-            st.subheader("회원 목록 및 관리")
-            if not all_users:
-                st.info("가입된 회원이 없습니다.")
-            else:
-                # 헤더 설정
-                c1, c2, c3, c4, c5 = st.columns([1.5, 1.5, 2, 2, 1])
+            st.subheader("회원 목록")
+            if all_users:
+                c1, c2, c3, c4, c5 = st.columns([1.5, 1.5, 2, 1.5, 1])
                 c1.markdown("**ID**")
-                c2.markdown("**현재 닉네임**")
-                c3.markdown("**새 닉네임 입력**")
-                c4.markdown("**변경**")
+                c2.markdown("**닉네임**")
+                c3.markdown("**닉네임 변경**")
+                c4.markdown("**적용**")
                 c5.markdown("**삭제**")
                 st.divider()
-                
                 for user in all_users:
                     u_data = user.to_dict()
                     u_id = user.id
                     u_nick = u_data.get("nickname", "-")
-                    
-                    cc1, cc2, cc3, cc4, cc5 = st.columns([1.5, 1.5, 2, 2, 1])
+                    cc1, cc2, cc3, cc4, cc5 = st.columns([1.5, 1.5, 2, 1.5, 1])
                     cc1.text(u_id)
                     cc2.text(u_nick)
+                    new_nick_val = cc3.text_input("label", key=f"input_{u_id}", label_visibility="collapsed", placeholder="새 닉네임")
                     
-                    # [기능] 강제 닉네임 변경 입력칸
-                    new_nick_val = cc3.text_input("label", key=f"input_{u_id}", label_visibility="collapsed", placeholder="변경할 닉네임")
-                    
-                    # [기능] 변경 버튼
-                    if cc4.button("닉네임 변경", key=f"change_{u_id}"):
+                    if cc4.button("변경", key=f"change_{u_id}"):
                         if new_nick_val:
-                            # 1. 유저 정보 업데이트
                             users_ref.document(u_id).update({"nickname": new_nick_val})
-                            # 2. 채팅 기록 내 이름도 업데이트
                             user_msgs = chat_ref.where("user_id", "==", u_id).stream()
-                            for msg in user_msgs:
-                                msg.reference.update({"name": new_nick_val})
-                            st.toast(f"{u_nick} -> {new_nick_val} 변경 완료")
+                            for msg in user_msgs: msg.reference.update({"name": new_nick_val})
+                            st.toast(f"변경 완료")
                             time.sleep(1)
                             st.rerun()
-                        else:
-                            st.warning("닉네임을 입력하세요.")
-
-                    # [기능] 계정 삭제 버튼
+                    
                     if cc5.button("삭제", key=f"ban_{u_id}", type="primary"):
                         users_ref.document(u_id).delete()
-                        st.toast(f"사용자 {u_id}를 삭제했습니다.")
+                        st.toast("삭제 완료")
                         time.sleep(1)
                         st.rerun()
 
-        # --- 3. 모니터링 & 공지 탭 (개별 삭제 추가) ---
         with admin_tab3:
-            st.subheader("💬 실시간 모니터링 & 개별 삭제")
-            
-            # 채팅 리스트 가져오기
+            st.subheader("실시간 모니터링")
             docs = chat_ref.order_by("timestamp", direction=firestore.Query.DESCENDING).stream()
-            
             for doc in docs:
                 data = doc.to_dict()
                 doc_id = doc.id
                 name = data.get("name")
                 msg = data.get("message")
                 is_deleted = data.get("is_deleted", False)
-                time_str = format_time_kst(data.get("timestamp"))
-                
-                # 컨테이너로 묶기
                 with st.container(border=True):
                     mc1, mc2 = st.columns([8, 2])
                     with mc1:
-                        if is_deleted:
-                            st.caption(f"🚫 {msg} (ID: {name})")
-                        else:
-                            st.write(f"**{name}**: {msg}")
-                            st.caption(f"시간: {time_str}")
-                    
+                        if is_deleted: st.caption(f"🚫 {msg} (ID: {name})")
+                        else: st.write(f"**{name}**: {msg}")
                     with mc2:
-                        # 이미 삭제된 글이 아니면 삭제 버튼 표시
                         if not is_deleted:
-                            if st.button("글 삭제", key=f"adm_del_{doc_id}", type="primary"):
-                                # [기능] 관리자에 의한 삭제 처리
+                            if st.button("삭제", key=f"adm_del_{doc_id}", type="primary"):
                                 chat_ref.document(doc_id).update({
                                     "message": "🚫 관리자에 의해 삭제된 글입니다.",
                                     "is_deleted": True
                                 })
-                                st.toast("글을 삭제했습니다.")
-                                time.sleep(0.5)
                                 st.rerun()
-
             st.divider()
-            st.subheader("📢 전체 공지 보내기")
-            notice_msg = st.text_input("공지할 내용을 입력하세요", placeholder="예: 서버 점검 예정입니다.")
+            notice_msg = st.text_input("공지 내용")
             if st.button("공지 전송"):
                 if notice_msg:
                     chat_ref.add({
@@ -286,17 +232,48 @@ else:
                         "is_deleted": False
                     })
                     maintain_chat_history()
-                    st.success("공지가 전송되었습니다!")
                     st.rerun()
 
     # ----------------------------------------------------
     # [B-2] 일반 사용자 화면
     # ----------------------------------------------------
     else:
-        # 사이드바 (일반 유저용)
+        # [핵심] 새로고침 버튼 우측 하단 고정
+        st.markdown("""
+            <style>
+            .fixed-refresh-btn-marker {
+                display: none;
+            }
+            .fixed-refresh-btn-marker + div button {
+                position: fixed !important;
+                bottom: 90px !important;    /* 바닥에서 90px 위 (채팅창 바로 위) */
+                right: 20px !important;     /* 오른쪽 벽에서 20px */
+                left: auto !important;      /* 왼쪽 붙음 방지 */
+                width: auto !important;     /* 버튼 너비 자동 */
+                z-index: 999999 !important;
+                background-color: white;
+                color: #FF4B4B;
+                border: 1px solid #FF4B4B;
+                box-shadow: 0px 4px 6px rgba(0,0,0,0.1);
+                border-radius: 20px;
+                font-weight: bold;
+                padding: 0.5rem 1rem !important;
+            }
+            .fixed-refresh-btn-marker + div button:hover {
+                background-color: #FF4B4B !important;
+                color: white !important;
+            }
+            </style>
+            <div class="fixed-refresh-btn-marker"></div>
+            """, unsafe_allow_html=True)
+            
+        # 이 버튼은 위 CSS에 의해 우측 하단에 고정됩니다.
+        if st.button("🔄 채팅 새로고침"):
+            st.rerun()
+
+        # 사이드바
         with st.sidebar:
             st.header(f"👤 {st.session_state.user_nickname}님")
-            
             with st.expander("닉네임 변경"):
                 change_nick = st.text_input("새 닉네임", value=st.session_state.user_nickname)
                 if st.button("저장"):
@@ -308,19 +285,14 @@ else:
                             for msg in my_msgs: msg.reference.update({"name": clean_nick})
                             st.session_state.user_nickname = clean_nick
                             st.rerun()
-            
             if st.button("🚪 로그아웃"):
                 st.session_state.logged_in = False
                 st.rerun()
-            
             st.divider()
             st.caption("문의사항은 관리자에게 연락.")
 
         # 메인 채팅창
-        col1, col2 = st.columns([3, 1])
-        with col1: st.title("💬 정동고 익명 채팅방")
-        with col2: 
-            if st.button("🔄 채팅 새로고침"): st.rerun()
+        st.title("💬 정동고 익명 채팅방")
         
         docs = chat_ref.order_by("timestamp").stream()
         chat_exists = False
@@ -333,54 +305,54 @@ else:
             msg_name = data.get("name")
             msg_text = data.get("message")
             msg_time = format_time_kst(data.get("timestamp"))
-            is_deleted = data.get("is_deleted", False) # 삭제 여부 확인
+            is_deleted = data.get("is_deleted", False)
             
-            # 삭제된 메시지는 스타일을 다르게 표시
-            if is_deleted:
-                # 회색 기울임꼴로 표시
-                text_html = f"""<div style='color: #888; font-style: italic;'>{msg_text}</div>
-                                <div style='display:block;text-align:right;font-size:0.7em;color:grey;'>{msg_time}</div>"""
-            else:
-                text_html = f"""{msg_text}<div style='display:block;text-align:right;font-size:0.7em;color:grey;'>{msg_time}</div>"""
-            
-            # [관리자 공지사항]
+            # 1. 관리자 공지
             if msg_id == "ADMIN_ACCOUNT":
                 with st.chat_message("admin", avatar="📢"):
                     st.error(f"**[공지] {msg_text}**") 
             
-            # [내 메시지]
+            # 2. 내 메시지
             elif msg_id == st.session_state.user_id:
                 with st.chat_message("user"):
-                    # 메시지와 삭제 버튼을 나란히 배치하기 위한 컬럼
-                    mc1, mc2 = st.columns([9, 1])
-                    with mc1:
-                        st.markdown(text_html, unsafe_allow_html=True)
-                    with mc2:
-                        # 내가 쓴 글이고, 아직 삭제 안 됐으면 삭제 버튼 표시
+                    # 메시지와 삭제 버튼을 나란히 배치 (비율 9:1)
+                    col_msg, col_del = st.columns([9, 1])
+                    with col_msg:
+                        if is_deleted:
+                            st.markdown(f"<div style='color:#999; font-style:italic;'>{msg_text}</div>", unsafe_allow_html=True)
+                        else:
+                            st.markdown(f"{msg_text}")
+                        st.caption(f"{msg_time}")
+                    
+                    with col_del:
                         if not is_deleted:
                             if st.button("🗑️", key=f"my_del_{doc_id}", help="이 글 삭제"):
-                                # [기능] 사용자 본인 삭제 처리
                                 chat_ref.document(doc_id).update({
                                     "message": f"🗑️ {st.session_state.user_nickname}님이 삭제한 글입니다.",
                                     "is_deleted": True
                                 })
                                 st.rerun()
             
-            # [남 메시지]
+            # 3. 남 메시지
             else:
                 with st.chat_message(msg_name, avatar=get_custom_avatar(msg_id)):
-                    st.markdown(f"**{msg_name}**")
-                    st.markdown(text_html, unsafe_allow_html=True)
-                    
+                    if is_deleted:
+                        st.markdown(f"<div style='color:#999; font-style:italic;'>{msg_text}</div>", unsafe_allow_html=True)
+                    else:
+                        st.markdown(f"**{msg_name}**")
+                        st.markdown(f"{msg_text}")
+                    st.caption(f"{msg_time}")
+
         if not chat_exists: st.info("대화가 없습니다.")
             
+        # 메시지 입력창
         if prompt := st.chat_input("메시지 입력..."):
             chat_ref.add({
                 "user_id": st.session_state.user_id,
                 "name": st.session_state.user_nickname,
                 "message": prompt,
                 "timestamp": firestore.SERVER_TIMESTAMP,
-                "is_deleted": False # 기본값: 삭제 안됨
+                "is_deleted": False
             })
             maintain_chat_history()
             st.rerun()
