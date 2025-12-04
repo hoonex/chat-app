@@ -237,26 +237,26 @@ else:
     # [B-2] 일반 사용자 화면
     # ----------------------------------------------------
     else:
-        # [핵심] 새로고침 버튼 고정 (Floating Button)
-        # CSS 선택자를 더 강력하게 수정했습니다. ( > 대신 띄어쓰기 사용 + !important)
+        # [핵심] 새로고침 버튼 하단 고정
+        # 화면 오른쪽 아래 (입력창 바로 위)에 고정되도록 CSS를 수정했습니다.
         st.markdown("""
             <style>
-            /* 이 마커(div) 바로 다음에 오는 div 안의 버튼을 타겟팅합니다 */
             .fixed-refresh-btn-marker {
                 display: none;
             }
-            /* 직계 자식(>)이 아니라 후손 선택자(띄어쓰기)를 사용하여 깊숙히 있는 버튼도 찾아냅니다 */
             .fixed-refresh-btn-marker + div button {
                 position: fixed !important;
-                top: 3.5rem !important;     /* 헤더 높이만큼 아래로 */
-                right: 1rem !important;     /* 오른쪽 끝에 고정 */
-                z-index: 999999 !important; /* 제일 위에 뜨도록 */
+                bottom: 80px !important;    /* 바닥에서 80px 위 (채팅창 바로 위) */
+                right: 20px !important;     /* 오른쪽 벽에서 20px */
+                left: auto !important;      /* 왼쪽 붙음 방지 */
+                z-index: 999999 !important;
                 background-color: white;
                 color: #FF4B4B;
                 border: 1px solid #f0f0f0;
-                box-shadow: 0px 2px 5px rgba(0,0,0,0.1);
+                box-shadow: 0px 4px 6px rgba(0,0,0,0.1);
                 font-weight: bold;
-                width: auto !important;
+                border-radius: 20px;
+                padding: 0.5rem 1rem;
             }
             .fixed-refresh-btn-marker + div button:hover {
                 border-color: #FF4B4B;
@@ -267,7 +267,7 @@ else:
             <div class="fixed-refresh-btn-marker"></div>
             """, unsafe_allow_html=True)
             
-        # 이 버튼은 위 CSS에 의해 오른쪽 위에 둥둥 떠있게 됩니다.
+        # 이 버튼은 이제 오른쪽 아래(채팅창 위)에 뜹니다.
         if st.button("🔄 채팅 새로고침"):
             st.rerun()
 
