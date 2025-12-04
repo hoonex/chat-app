@@ -78,7 +78,7 @@ if "is_admin_mode" not in st.session_state: st.session_state.is_admin_mode = Fal
 # [A] 로그인 전 화면 (로그인 / 회원가입)
 # ==========================================
 if not st.session_state.logged_in:
-    st.title("🔒 입장하기")
+    st.title("🔒정동고 익명 채팅방 입장하기")
     
     # 로그인 화면에서는 관리자 메뉴가 아예 안 보임!
     tab1, tab2 = st.tabs(["로그인", "회원가입"])
@@ -199,7 +199,7 @@ else:
                         st.rerun()
                 
                 st.divider()
-                if st.button("💀 회원 전체 삭제"):
+                if st.button("회원 전체 삭제"):
                     for u in all_users: u.reference.delete()
                     st.success("삭제 완료")
                     st.rerun()
@@ -216,7 +216,7 @@ else:
     else:
         # 채팅방 UI
         col1, col2 = st.columns([3, 1])
-        with col1: st.title("💬 우리들의 채팅방")
+        with col1: st.title("💬 정동고 익명 채팅방")
         with col2: 
             if st.button("🔄 채팅 새로고침"): st.rerun()
         
