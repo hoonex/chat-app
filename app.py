@@ -5,7 +5,7 @@ import time
 import hashlib
 import base64
 import re
-import uuid # [NEW] 익명 아이디 생성을 위해 필요
+import uuid
 from datetime import datetime, timedelta, timezone
 import streamlit.components.v1 as components
 
@@ -16,7 +16,7 @@ st.set_page_config(page_title="실시간 채팅", page_icon="💬", layout="wide
 MAX_CHAT_MESSAGES = 50
 INACTIVE_DAYS_LIMIT = 90
 KST = timezone(timedelta(hours=9))
-DEFAULT_DAILY_LIMIT = 0 # [변경] 0이면 무제한
+DEFAULT_DAILY_LIMIT = 0 # 0=무제한
 
 # --- 3. 유틸리티 함수들 ---
 def hash_password(password):
@@ -73,19 +73,14 @@ def filter_message(text, banned_words_str):
         if word in text: text = text.replace(word, "*" * len(word))
     return text
 
-# 시간 제한 체크 (0이면 무제한)
 def check_time_limit(user_id):
-    if user_id == "ADMIN_ACCOUNT":
-        return True, 0, 0
-        
+    if user_id == "ADMIN_ACCOUNT": return True, 0, 0
     user_ref = users_ref.document(user_id)
     user_doc = user_ref.get()
-    
-    if not user_doc.exists:
-        return True, 0, 0
+    if not user_doc.exists: return True, 0, 0
 
     data = user_doc.to_dict()
-    daily_limit = data.get("daily_limit", 0) # 기본값 0 (무제한)
+    daily_limit = data.get("daily_limit", 0)
     used_minutes = data.get("used_minutes", 0)
     last_active_ts = data.get("last_active_ts")
     last_date_str = data.get("last_date_str")
@@ -101,21 +96,17 @@ def check_time_limit(user_id):
     if last_active_ts:
         last_active = last_active_ts.astimezone(KST)
         diff = (now - last_active).total_seconds() / 60
-        if diff < 10: 
-            added_time = diff
+        if diff < 10: added_time = diff
             
     new_used = used_minutes + added_time
-    
     user_ref.update({
         "used_minutes": new_used,
         "last_active_ts": firestore.SERVER_TIMESTAMP,
         "last_date_str": last_date_str
     })
     
-    # [수정] limit가 0보다 클 때만 체크 (0은 무제한)
     if daily_limit > 0 and new_used > daily_limit:
         return False, int(new_used), daily_limit 
-        
     return True, int(new_used), daily_limit
 
 # --- 4. Firebase 연결 ---
@@ -145,7 +136,6 @@ if "is_super_admin" not in st.session_state: st.session_state.is_super_admin = F
 # ==========================================
 if not st.session_state.logged_in:
     st.title("정동고 익명 채팅방 입장하기")
-    
     tab1, tab2 = st.tabs(["로그인", "회원가입"])
     
     with tab1:
@@ -181,31 +171,28 @@ if not st.session_state.logged_in:
                         st.rerun()
                     else: st.error("정보가 틀립니다.")
 
-        # [NEW] 익명 입장 버튼 (로그인 탭 하단)
         st.markdown("---")
         if st.button("🕵️ 익명으로 바로 입장하기", type="primary", use_container_width=True):
-            # 익명 계정 생성 (guest_랜덤ID)
             random_suffix = str(uuid.uuid4())[:6]
             guest_id = f"guest_{random_suffix}"
             guest_nick = f"익명_{random_suffix}"
             
-            # DB에 게스트 정보 저장 (그래야 관리자가 시간제한 걸 수 있음)
             users_ref.document(guest_id).set({
-                "password": "GUEST_NO_PASSWORD", # 비밀번호 없음
+                "password": "GUEST_NO_PASSWORD",
                 "nickname": guest_nick,
                 "last_login": firestore.SERVER_TIMESTAMP,
                 "last_active_ts": firestore.SERVER_TIMESTAMP,
-                "daily_limit": 0, # 무제한 기본
+                "daily_limit": 0,
                 "used_minutes": 0,
                 "last_date_str": datetime.now(KST).strftime("%Y-%m-%d"),
-                "is_guest": True # 게스트 표시
+                "is_guest": True
             })
             
             st.session_state.logged_in = True
             st.session_state.user_id = guest_id
             st.session_state.user_nickname = guest_nick
             st.session_state.is_super_admin = False
-            st.success(f"임시 닉네임 '{guest_nick}'으로 입장합니다.")
+            st.success(f"'{guest_nick}'으로 입장합니다.")
             time.sleep(0.5)
             st.rerun()
 
@@ -225,7 +212,7 @@ if not st.session_state.logged_in:
                     "password": hash_password(new_pw),
                     "nickname": new_nick,
                     "last_login": firestore.SERVER_TIMESTAMP,
-                    "daily_limit": 0, # 무제한 기본
+                    "daily_limit": 0,
                     "used_minutes": 0,
                     "last_date_str": datetime.now(KST).strftime("%Y-%m-%d")
                 })
@@ -294,24 +281,19 @@ else:
                     u_data = user.to_dict()
                     u_id = user.id
                     u_nick = u_data.get("nickname", "-")
-                    u_limit = u_data.get("daily_limit", 0) # 기본 0
+                    u_limit = u_data.get("daily_limit", 0)
                     u_used = u_data.get("used_minutes", 0)
                     
                     cc1, cc2, cc3, cc4, cc5, cc6 = st.columns([1.5, 1.5, 1.5, 1.5, 1, 1])
                     cc1.text(u_id)
                     cc2.text(u_nick)
                     
-                    # 사용량 텍스트
                     limit_str = "무제한" if u_limit == 0 else f"{u_limit}분"
                     usage_text = f"{int(u_used)}분 / {limit_str}"
                     
-                    # 초과 시 빨간색
-                    if u_limit > 0 and u_used > u_limit:
-                        cc3.error(usage_text)
-                    else:
-                        cc3.text(usage_text)
+                    if u_limit > 0 and u_used > u_limit: cc3.error(usage_text)
+                    else: cc3.text(usage_text)
                     
-                    # 제한 설정 입력 (0 = 무제한)
                     new_limit = cc4.number_input("limit", min_value=0, value=u_limit, key=f"limit_{u_id}", label_visibility="collapsed")
                     
                     if cc5.button("저장", key=f"save_{u_id}"):
@@ -390,7 +372,6 @@ else:
     # [B-2] 일반 사용자 화면
     # ----------------------------------------------------
     else:
-        # 시간 초과 체크
         if not is_allowed:
             st.error("⏳ 일일 이용 시간이 초과되었습니다.")
             st.info(f"오늘은 {used_min}분을 사용하셨습니다.")
@@ -434,23 +415,28 @@ else:
         with st.sidebar:
             st.header(f"👤 {st.session_state.user_nickname}님")
             
-            # 남은 시간 표시
+            # [수정] 무제한일 땐 글자 없이, 제한 있을 때만 표시
             if limit_min == 0:
-                st.info(f"⏳ 사용: {used_min}분 (무제한)")
+                st.info(f"⏳ 사용: {used_min}분")
             else:
                 st.info(f"⏳ 사용: {used_min}분 / {limit_min}분")
                 
             with st.expander("닉네임 변경"):
-                change_nick = st.text_input("새 닉네임", value=st.session_state.user_nickname)
-                if st.button("저장"):
-                    if change_nick != st.session_state.user_nickname:
-                        clean_nick = change_nick.strip()
-                        if clean_nick:
-                            users_ref.document(st.session_state.user_id).update({"nickname": clean_nick})
-                            my_msgs = chat_ref.where("user_id", "==", st.session_state.user_id).stream()
-                            for msg in my_msgs: msg.reference.update({"name": clean_nick})
-                            st.session_state.user_nickname = clean_nick
-                            st.rerun()
+                # [수정] 익명(게스트) 사용자 변경 제한
+                if st.session_state.user_id.startswith("guest_"):
+                    st.caption("🚫 익명 사용자는 닉네임을 변경할 수 없습니다.")
+                else:
+                    change_nick = st.text_input("새 닉네임", value=st.session_state.user_nickname)
+                    if st.button("저장"):
+                        if change_nick != st.session_state.user_nickname:
+                            clean_nick = change_nick.strip()
+                            if clean_nick:
+                                users_ref.document(st.session_state.user_id).update({"nickname": clean_nick})
+                                my_msgs = chat_ref.where("user_id", "==", st.session_state.user_id).stream()
+                                for msg in my_msgs: msg.reference.update({"name": clean_nick})
+                                st.session_state.user_nickname = clean_nick
+                                st.rerun()
+                                
             if st.button("🚪 로그아웃"):
                 st.session_state.logged_in = False
                 st.rerun()
