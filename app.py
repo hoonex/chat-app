@@ -12,7 +12,10 @@ st.set_page_config(page_title="실시간 채팅", page_icon="💬")
 
 # --- 2. 설정값 ---
 MAX_CHAT_MESSAGES = 50  # 최대 메시지 저장 개수
-INACTIVE_DAYS_LIMIT = 90 # 미접속 계정 삭제 기준일
+INACTIVE_DAYS_LIMIT = 90 # 미접속 계정 삭제 기준일 (3개월)
+
+# 한국 시간(KST) 설정
+KST = timezone(timedelta(hours=9))
 
 # --- 3. 유틸리티 함수들 ---
 
@@ -33,6 +36,7 @@ def get_custom_avatar(user_id):
     b64_svg = base64.b64encode(svg_code.encode("utf-8")).decode("utf-8")
     return f"data:image/svg+xml;base64,{b64_svg}"
 
+# [자동 기능 1] 채팅 메시지 개수 관리
 def maintain_chat_history():
     docs = chat_ref.order_by("timestamp").stream()
     doc_list = list(docs)
@@ -40,6 +44,26 @@ def maintain_chat_history():
         delete_count = len(doc_list) - MAX_CHAT_MESSAGES
         for i in range(delete_count):
             doc_list[i].reference.delete()
+
+# [자동 기능 2] 오래된 계정 자동 삭제 (로그인 할 때 수행됨)
+def clean_inactive_users():
+    try:
+        # 기준 날짜 (오늘 - 90일)
+        cutoff_date = datetime.now(timezone.utc) - timedelta(days=INACTIVE_DAYS_LIMIT)
+        # last_login이 기준보다 옛날인 계정 찾기
+        old_users = users_ref.where("last_login", "<", cutoff_date).stream()
+        for user in old_users:
+            user.reference.delete()
+    except:
+        pass # 에러 나도 사용자에게는 티 안 나게 넘어감
+
+# 날짜 포맷팅 함수 (오후 2:30 형태)
+def format_time_kst(timestamp):
+    if not timestamp:
+        return ""
+    # UTC -> KST 변환
+    dt_kst = timestamp.astimezone(KST)
+    return dt_kst.strftime("%p %I:%M").replace("AM", "오전").replace("PM", "오후")
 
 # --- 4. Firebase 연결 ---
 if not firebase_admin._apps:
@@ -67,7 +91,7 @@ if "user_nickname" not in st.session_state:
 # [A] 로그인 전 화면
 # ==========================================
 if not st.session_state.logged_in:
-    st.title("🔒 입장하기")
+    st.title("정동고 익명 채팅방 입장하기")
     
     tab1, tab2 = st.tabs(["로그인", "회원가입"])
     
@@ -84,9 +108,14 @@ if not st.session_state.logged_in:
                 if doc.exists:
                     user_data = doc.to_dict()
                     if user_data['password'] == hash_password(login_pw):
+                        # 1. 마지막 접속일 업데이트
                         users_ref.document(login_id).update({
                             "last_login": firestore.SERVER_TIMESTAMP
                         })
+                        
+                        # 2. [자동 청소] 로그인 시 오래된 계정 정리 실행
+                        clean_inactive_users()
+
                         st.session_state.logged_in = True
                         st.session_state.user_id = login_id
                         st.session_state.user_nickname = user_data['nickname']
@@ -130,7 +159,6 @@ if not st.session_state.logged_in:
 else:
     with st.sidebar:
         st.header(f"👤 {st.session_state.user_nickname}님")
-        # [삭제됨] 여기에 있던 새로고침 버튼 삭제함
         
         st.divider()
         
@@ -174,7 +202,7 @@ else:
             
             if st.button("계정 전체 삭제"):
                 if is_admin:
-                    with st.spinner("계정 삭제 중..."):
+                    with st.spinner("삭제 중..."):
                         users = users_ref.stream()
                         for user in users: user.reference.delete()
                     st.success("완료")
@@ -184,26 +212,15 @@ else:
                 else:
                     st.error("암호 오류")
 
-            if st.button(f"💤 미접속 계정 정리 ({INACTIVE_DAYS_LIMIT}일)"):
-                if is_admin:
-                    with st.spinner("검색 중..."):
-                        cutoff_date = datetime.now(timezone.utc) - timedelta(days=INACTIVE_DAYS_LIMIT)
-                        old_users = users_ref.where("last_login", "<", cutoff_date).stream()
-                        count = 0
-                        for user in old_users:
-                            user.reference.delete()
-                            count += 1
-                    st.success(f"{count}개 계정 삭제 완료")
-                else:
-                    st.error("암호 오류")
+        # [NEW] 사이드바 마지막에 안내 문구 추가
+        st.divider()
+        st.caption(f"ℹ️ {INACTIVE_DAYS_LIMIT}일 이상 접속하지 않은 계정은\n서버 용량 확보를 위해 자동 삭제됩니다.")
 
     # --- 메인 채팅창 ---
-    # [수정됨] 오른쪽 위에 '채팅 새로고침' 버튼 크게 배치
-    col1, col2 = st.columns([3, 1]) # 비율 조절해서 버튼 공간 확보
+    col1, col2 = st.columns([3, 1])
     with col1:
         st.title("💬 정동고 익명 채팅방")
     with col2:
-        # 여기에 글자를 넣었습니다!
         if st.button("🔄 채팅 새로고침"): 
             st.rerun()
     
@@ -216,15 +233,28 @@ else:
         msg_sender_id = data.get("user_id")
         msg_name = data.get("name")
         msg_text = data.get("message")
+        msg_time = data.get("timestamp") # 시간 가져오기
+        
+        # 시간 문자열 포맷팅
+        time_str = format_time_kst(msg_time) if msg_time else ""
+        
+        # HTML을 사용해서 시간을 오른쪽에 작게 표시
+        # float: right로 오른쪽 정렬, color: grey로 회색 처리
+        text_with_time = f"""
+        {msg_text} 
+        <div style='display: block; text-align: right; font-size: 0.75em; color: grey; margin-top: 5px;'>
+            {time_str}
+        </div>
+        """
         
         if msg_sender_id == st.session_state.user_id:
             with st.chat_message("user"):
-                st.write(msg_text)
+                st.markdown(text_with_time, unsafe_allow_html=True)
         else:
             custom_avatar = get_custom_avatar(msg_sender_id)
             with st.chat_message(msg_name, avatar=custom_avatar):
                 st.markdown(f"**{msg_name}**")
-                st.write(msg_text)
+                st.markdown(text_with_time, unsafe_allow_html=True)
                 
     if not chat_exists:
         st.info("대화가 없습니다.")
