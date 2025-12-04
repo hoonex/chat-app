@@ -55,6 +55,27 @@ def format_time_kst(timestamp):
     dt_kst = timestamp.astimezone(KST)
     return dt_kst.strftime("%p %I:%M").replace("AM", "오전").replace("PM", "오후")
 
+# [NEW] 시스템 설정(잠금여부, 금칙어) 가져오기
+def get_system_config():
+    doc = system_ref.document("config").get()
+    if doc.exists:
+        return doc.to_dict()
+    else:
+        # 기본값 설정
+        default_config = {"is_locked": False, "banned_words": ""}
+        system_ref.document("config").set(default_config)
+        return default_config
+
+# [NEW] 욕설 필터링 함수
+def filter_message(text, banned_words_str):
+    if not banned_words_str:
+        return text
+    words = [w.strip() for w in banned_words_str.split(",") if w.strip()]
+    for word in words:
+        if word in text:
+            text = text.replace(word, "*" * len(word))
+    return text
+
 # --- 4. Firebase 연결 ---
 if not firebase_admin._apps:
     try:
@@ -68,6 +89,7 @@ if not firebase_admin._apps:
 db = firestore.client()
 users_ref = db.collection("users")
 chat_ref = db.collection("global_chat")
+system_ref = db.collection("system") # [NEW] 시스템 설정 저장소
 
 # --- 5. 세션 초기화 ---
 if "logged_in" not in st.session_state: st.session_state.logged_in = False
@@ -135,8 +157,13 @@ if not st.session_state.logged_in:
 # [B] 로그인 성공 후
 # ==========================================
 else:
+    # 시스템 설정 불러오기
+    sys_config = get_system_config()
+    is_chat_locked = sys_config.get("is_locked", False)
+    banned_words = sys_config.get("banned_words", "")
+
     # ----------------------------------------------------
-    # [B-1] 관리자 전용 화면
+    # [B-1] 관리자 전용 화면 (노란 배경)
     # ----------------------------------------------------
     if st.session_state.is_super_admin:
         st.markdown("""
@@ -155,7 +182,8 @@ else:
 
         st.title("🛡️ 관리자 통제 센터")
         
-        admin_tab1, admin_tab2, admin_tab3 = st.tabs(["📊 통계", "👥 회원 관리", "📢 모니터링"])
+        # [NEW] 탭 4개로 확장
+        admin_tab1, admin_tab2, admin_tab3, admin_tab4 = st.tabs(["📊 통계", "👥 회원 관리", "📢 모니터링", "⚙️ 시스템 설정"])
         
         with admin_tab1:
             all_users = list(users_ref.stream())
@@ -199,9 +227,7 @@ else:
                         st.rerun()
 
         with admin_tab3:
-            st.subheader("실시간 모니터링 & 삭제")
-            
-            # [복구된 기능] 채팅 전체 삭제 버튼
+            st.subheader("실시간 모니터링")
             if st.button("🗑️ 채팅방 기록 전체 삭제 (초기화)", type="primary"):
                 docs = chat_ref.stream()
                 for doc in docs:
@@ -233,7 +259,7 @@ else:
                         if not is_deleted:
                             if st.button("삭제", key=f"adm_del_{doc_id}", type="primary"):
                                 chat_ref.document(doc_id).update({
-                                    "is_deleted": True # 관리자가 삭제하면 내용과 관계없이 플래그만 변경
+                                    "is_deleted": True
                                 })
                                 st.rerun()
             st.divider()
@@ -250,11 +276,43 @@ else:
                     maintain_chat_history()
                     st.rerun()
 
+        # [NEW] 4번째 탭: 시스템 설정
+        with admin_tab4:
+            st.subheader("⚙️ 시스템 설정")
+            st.info("채팅방의 상태를 제어하거나 금칙어를 설정합니다.")
+            
+            # 1. 채팅방 얼리기
+            st.markdown("### 1. 채팅방 얼리기 (Chat Lock)")
+            lock_status = st.toggle("채팅방 얼리기 (모든 사용자 입력 차단)", value=is_chat_locked)
+            
+            if lock_status != is_chat_locked:
+                system_ref.document("config").update({"is_locked": lock_status})
+                if lock_status:
+                    st.error("🔒 채팅방이 얼었습니다! 이제 관리자만 말할 수 있습니다.")
+                else:
+                    st.success("🔓 채팅방 녹음! 다시 대화가 가능합니다.")
+                time.sleep(1)
+                st.rerun()
+            
+            st.divider()
+            
+            # 2. 금칙어 설정
+            st.markdown("### 2. 금칙어 관리 (Banned Words)")
+            st.caption("쉼표(,)로 구분해서 입력하세요. 예: 바보,멍청이,나쁜말")
+            
+            new_banned_words = st.text_area("금칙어 목록", value=banned_words, height=100)
+            
+            if st.button("금칙어 저장"):
+                system_ref.document("config").update({"banned_words": new_banned_words})
+                st.success("금칙어 목록이 업데이트되었습니다.")
+                time.sleep(1)
+                st.rerun()
+
     # ----------------------------------------------------
     # [B-2] 일반 사용자 화면
     # ----------------------------------------------------
     else:
-        # 버튼 고정 (우측 상단, 작게)
+        # 우측 상단 고정 버튼
         components.html("""
             <script>
                 function fixButtonPosition() {
@@ -266,7 +324,6 @@ else:
                             btn.style.right = '20px';
                             btn.style.bottom = 'auto'; 
                             btn.style.left = 'auto';   
-                            
                             btn.style.width = 'auto'; 
                             btn.style.minWidth = '0px';
                             btn.style.zIndex = '999999';
@@ -296,9 +353,7 @@ else:
                     if change_nick != st.session_state.user_nickname:
                         clean_nick = change_nick.strip()
                         if clean_nick:
-                            # 1. 내 정보 업데이트
                             users_ref.document(st.session_state.user_id).update({"nickname": clean_nick})
-                            # 2. 내 모든 글의 작성자 이름 업데이트
                             my_msgs = chat_ref.where("user_id", "==", st.session_state.user_id).stream()
                             for msg in my_msgs: msg.reference.update({"name": clean_nick})
                             st.session_state.user_nickname = clean_nick
@@ -312,6 +367,10 @@ else:
         # 메인 채팅창
         st.title("💬 정동고 익명 채팅방")
         
+        # [NEW] 채팅방 잠금 상태 표시
+        if is_chat_locked:
+            st.error("🔒 현재 관리자가 채팅방을 얼렸습니다. 메시지를 보낼 수 없습니다.")
+
         docs = chat_ref.order_by("timestamp").stream()
         chat_exists = False
         
@@ -320,22 +379,19 @@ else:
             data = doc.to_dict()
             doc_id = doc.id
             msg_id = data.get("user_id")
-            msg_name = data.get("name") # 여기서 가져오는 name은 닉네임 변경 시 업데이트된 최신 이름임
+            msg_name = data.get("name")
             msg_text = data.get("message")
             msg_time = format_time_kst(data.get("timestamp"))
             is_deleted = data.get("is_deleted", False)
             
-            # [핵심 로직] 삭제된 메시지 표시 방법 변경
-            # DB에 저장된 텍스트를 무시하고, 화면 그릴 때 실시간으로 이름을 조합함
+            # 삭제된 글
             if is_deleted:
-                # 관리자가 아닌 경우엔 'OOO님이 삭제한 글입니다'로 표시
                 if msg_id == "ADMIN_ACCOUNT":
                     display_text = "🚫 관리자에 의해 삭제된 공지입니다."
-                elif msg_text == "🚫 관리자에 의해 삭제된 글입니다.": # 관리자가 지운 경우
+                elif msg_text == "🚫 관리자에 의해 삭제된 글입니다.":
                     display_text = "🚫 관리자에 의해 삭제된 글입니다."
                 else:
-                    # [여기] msg_name은 최신 닉네임이 반영되어 있음
-                    display_text = f"🗑️ {msg_name}님이 삭제한 글입니다."
+                    display_text = f"🗑️ {msg_name}님이 삭제한 글입니다." # 닉네임 연동됨
                 
                 text_html = f"""<div style='color:#888;font-style:italic;'>{display_text}</div>
                                 <div style='display:block;text-align:right;font-size:0.7em;color:grey;'>{msg_time}</div>"""
@@ -358,8 +414,7 @@ else:
                         st.markdown(text_html, unsafe_allow_html=True)
                     with col_del:
                         if not is_deleted:
-                            if st.button("🗑️", key=f"my_del_{doc_id}", help="이 글 삭제"):
-                                # [핵심] 삭제할 때 메시지 내용을 굳이 바꾸지 않아도 됨 (is_deleted만 True로)
+                            if st.button("🗑️", key=f"my_del_{doc_id}", help="삭제"):
                                 chat_ref.document(doc_id).update({
                                     "is_deleted": True
                                 })
@@ -374,12 +429,15 @@ else:
 
         if not chat_exists: st.info("대화가 없습니다.")
             
-        # 메시지 입력창
-        if prompt := st.chat_input("메시지 입력..."):
+        # [NEW] 메시지 입력창 (잠금 상태면 비활성화)
+        if prompt := st.chat_input("메시지 입력...", disabled=is_chat_locked):
+            # [NEW] 금칙어 필터링 적용
+            filtered_msg = filter_message(prompt, banned_words)
+            
             chat_ref.add({
                 "user_id": st.session_state.user_id,
                 "name": st.session_state.user_nickname,
-                "message": prompt,
+                "message": filtered_msg, # 필터링된 메시지 저장
                 "timestamp": firestore.SERVER_TIMESTAMP,
                 "is_deleted": False
             })
