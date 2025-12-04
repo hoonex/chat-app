@@ -3,6 +3,7 @@ import firebase_admin
 from firebase_admin import credentials
 from firebase_admin import firestore
 import time
+import urllib.parse
 
 # --- 1. 페이지 설정 ---
 st.set_page_config(page_title="실시간 채팅", page_icon="💬")
@@ -24,14 +25,22 @@ chat_ref = db.collection("global_chat")
 with st.sidebar:
     st.header("👤 내 정보")
     
-    # [수정 1] 이름을 입력받을 때 공백 제거 (.strip())
-    # key를 지정해서 입력 값을 안전하게 잡습니다.
-    if "username" not in st.session_state:
-        st.session_state.username = "익명"
+    # [핵심 수정 1] 세션 상태 대신 입력창 값을 실시간 변수로 받습니다.
+    # 초기값 설정 (처음 켤 때만 적용)
+    if "init_name" not in st.session_state:
+        st.session_state.init_name = "익명"
+    
+    # 입력창을 만들고 바로 변수에 담습니다.
+    raw_name = st.text_input("닉네임", value=st.session_state.init_name)
+    
+    # [핵심 수정 2] 무조건 공백을 제거하고 '현재 이름'으로 확정합니다.
+    # 이제부터 이 변수(USER_NAME)가 법입니다.
+    USER_NAME = raw_name.strip()
+    if not USER_NAME:
+        USER_NAME = "익명"
         
-    input_name = st.text_input("닉네임", value=st.session_state.username)
-    # 입력된 이름의 앞뒤 공백을 자동으로 삭제해서 저장
-    st.session_state.username = input_name.strip()
+    # 나중에 다시 켰을 때 기억하기 위해 세션에 저장
+    st.session_state.init_name = USER_NAME
     
     st.divider()
     
@@ -57,9 +66,7 @@ with st.sidebar:
 # --- 4. 메인 채팅 화면 ---
 st.title("💬 정동고 익명 채팅방")
 
-# 메시지 가져오기
 docs = chat_ref.order_by("timestamp").stream()
-
 empty_check = True
 
 for doc in docs:
@@ -68,14 +75,17 @@ for doc in docs:
     sender_name = data.get("name", "알 수 없음")
     message_text = data.get("message", "")
     
-    # [수정 2] 보낸 사람 이름도 혹시 모르니 공백 제거해서 비교
-    if sender_name.strip() == st.session_state.username:
+    # [핵심 수정 3] 비교할 때 위에서 만든 USER_NAME 변수를 씁니다.
+    # 보낸 사람 이름도 공백 제거해서 비교
+    if sender_name.strip() == USER_NAME:
         # 🟢 나 (오른쪽)
         with st.chat_message("user"):
             st.write(message_text)
     else:
-        # 🔴 남 (왼쪽) - 예쁜 아이콘 적용
-        icon_url = f"https://ui-avatars.com/api/?name={sender_name}&background=random&color=fff"
+        # 🔴 남 (왼쪽)
+        safe_name = urllib.parse.quote(sender_name.strip())
+        icon_url = f"https://api.dicebear.com/9.x/initials/svg?seed={safe_name}"
+        
         with st.chat_message(sender_name, avatar=icon_url):
             st.markdown(f"**{sender_name}**")
             st.write(message_text)
@@ -85,13 +95,10 @@ if empty_check:
 
 # --- 5. 메시지 전송 ---
 if prompt := st.chat_input("메시지 입력..."):
-    # [수정 3] 메시지 보낼 때도 내 이름을 확실하게 공백 제거해서 보냄
-    current_name = st.session_state.username
-    if not current_name: # 이름이 비어있으면 '익명'으로 강제 설정
-        current_name = "익명"
-        
+    # [핵심 수정 4] 메시지를 보낼 때도 무조건 USER_NAME 변수를 씁니다.
+    # 이렇게 하면 비교하는 이름과 저장하는 이름이 100% 똑같을 수밖에 없습니다.
     chat_ref.add({
-        "name": current_name,
+        "name": USER_NAME,
         "message": prompt,
         "timestamp": firestore.SERVER_TIMESTAMP
     })
