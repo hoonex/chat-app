@@ -15,6 +15,7 @@ st.set_page_config(page_title="실시간 채팅", page_icon="💬", layout="wide
 MAX_CHAT_MESSAGES = 50
 INACTIVE_DAYS_LIMIT = 90
 KST = timezone(timedelta(hours=9))
+DEFAULT_DAILY_LIMIT = 9999 # 기본 제한 시간 (분) - 사실상 무제한
 
 # --- 3. 유틸리티 함수들 ---
 def hash_password(password):
@@ -55,7 +56,6 @@ def format_time_kst(timestamp):
     dt_kst = timestamp.astimezone(KST)
     return dt_kst.strftime("%p %I:%M").replace("AM", "오전").replace("PM", "오후")
 
-# 시스템 설정 가져오기
 def get_system_config():
     doc = system_ref.document("config").get()
     if doc.exists:
@@ -65,15 +65,62 @@ def get_system_config():
         system_ref.document("config").set(default_config)
         return default_config
 
-# 욕설 필터링
 def filter_message(text, banned_words_str):
-    if not banned_words_str:
-        return text
+    if not banned_words_str: return text
     words = [w.strip() for w in banned_words_str.split(",") if w.strip()]
     for word in words:
-        if word in text:
-            text = text.replace(word, "*" * len(word))
+        if word in text: text = text.replace(word, "*" * len(word))
     return text
+
+# [NEW] 시간 제한 체크 및 업데이트 함수
+def check_time_limit(user_id):
+    if user_id == "ADMIN_ACCOUNT":
+        return True, 0, 9999
+        
+    user_ref = users_ref.document(user_id)
+    user_doc = user_ref.get()
+    
+    if not user_doc.exists:
+        return True, 0, 9999
+
+    data = user_doc.to_dict()
+    daily_limit = data.get("daily_limit", DEFAULT_DAILY_LIMIT)
+    used_minutes = data.get("used_minutes", 0)
+    last_active_ts = data.get("last_active_ts")
+    last_date_str = data.get("last_date_str")
+    
+    now = datetime.now(KST)
+    today_str = now.strftime("%Y-%m-%d")
+    
+    # 1. 날짜가 바뀌었으면 사용량 초기화
+    if last_date_str != today_str:
+        used_minutes = 0
+        last_date_str = today_str
+        
+    # 2. 사용 시간 누적 계산 (마지막 활동으로부터 흐른 시간)
+    added_time = 0
+    if last_active_ts:
+        # DB의 타임스탬프를 KST로 변환
+        last_active = last_active_ts.astimezone(KST)
+        diff = (now - last_active).total_seconds() / 60
+        # 10분 이내의 활동만 연속된 세션으로 인정 (장시간 자리는 제외)
+        if diff < 10: 
+            added_time = diff
+            
+    new_used = used_minutes + added_time
+    
+    # 3. DB 업데이트
+    user_ref.update({
+        "used_minutes": new_used,
+        "last_active_ts": firestore.SERVER_TIMESTAMP,
+        "last_date_str": last_date_str
+    })
+    
+    # 4. 제한 초과 여부 확인
+    if new_used > daily_limit:
+        return False, int(new_used), daily_limit # 차단
+        
+    return True, int(new_used), daily_limit
 
 # --- 4. Firebase 연결 ---
 if not firebase_admin._apps:
@@ -125,7 +172,11 @@ if not st.session_state.logged_in:
                 else:
                     doc = users_ref.document(login_id).get()
                     if doc.exists and doc.to_dict()['password'] == hash_password(login_pw):
-                        users_ref.document(login_id).update({"last_login": firestore.SERVER_TIMESTAMP})
+                        # 로그인 시 마지막 활동 시간 초기화
+                        users_ref.document(login_id).update({
+                            "last_login": firestore.SERVER_TIMESTAMP,
+                            "last_active_ts": firestore.SERVER_TIMESTAMP # 활동 시작점
+                        })
                         clean_inactive_users()
                         st.session_state.logged_in = True
                         st.session_state.user_id = login_id
@@ -148,7 +199,10 @@ if not st.session_state.logged_in:
                 users_ref.document(new_id).set({
                     "password": hash_password(new_pw),
                     "nickname": new_nick,
-                    "last_login": firestore.SERVER_TIMESTAMP
+                    "last_login": firestore.SERVER_TIMESTAMP,
+                    "daily_limit": DEFAULT_DAILY_LIMIT, # 기본 제한시간
+                    "used_minutes": 0,
+                    "last_date_str": datetime.now(KST).strftime("%Y-%m-%d")
                 })
                 st.success("가입 완료! 로그인해주세요.")
 
@@ -156,10 +210,18 @@ if not st.session_state.logged_in:
 # [B] 로그인 성공 후
 # ==========================================
 else:
-    # 시스템 설정 불러오기
+    # 시스템 설정
     sys_config = get_system_config()
     is_chat_locked = sys_config.get("is_locked", False)
     banned_words = sys_config.get("banned_words", "")
+
+    # [NEW] 시간 제한 체크 (관리자 제외)
+    is_allowed = True
+    used_min = 0
+    limit_min = DEFAULT_DAILY_LIMIT
+    
+    if not st.session_state.is_super_admin:
+        is_allowed, used_min, limit_min = check_time_limit(st.session_state.user_id)
 
     # ----------------------------------------------------
     # [B-1] 관리자 전용 화면 (노란 배경)
@@ -174,13 +236,9 @@ else:
             """, unsafe_allow_html=True)
 
         st.sidebar.header("🛡️ 관리자 메뉴")
-        
-        # [NEW] 관리자 전용 심플 새로고침 버튼
         if st.sidebar.button("🔄 관리자 페이지 새로고침"):
             st.rerun()
-            
         st.sidebar.divider()
-        
         if st.sidebar.button("🚪 관리자 로그아웃"):
             st.session_state.logged_in = False
             st.session_state.is_super_admin = False
@@ -198,34 +256,46 @@ else:
             c2.metric("총 메시지", f"{len(all_chats)}개")
 
         with admin_tab2:
-            st.subheader("회원 목록")
+            st.subheader("회원 목록 및 시간 제한 설정")
             if all_users:
-                c1, c2, c3, c4, c5 = st.columns([1.5, 1.5, 2, 1.5, 1])
+                # 헤더
+                c1, c2, c3, c4, c5, c6 = st.columns([1.5, 1.5, 1.5, 1.5, 1, 1])
                 c1.markdown("**ID**")
                 c2.markdown("**닉네임**")
-                c3.markdown("**닉네임 변경**")
-                c4.markdown("**적용**")
-                c5.markdown("**삭제**")
+                c3.markdown("**사용/제한(분)**")
+                c4.markdown("**제한 설정**")
+                c5.markdown("**적용**")
+                c6.markdown("**관리**")
                 st.divider()
+                
                 for user in all_users:
                     u_data = user.to_dict()
                     u_id = user.id
                     u_nick = u_data.get("nickname", "-")
-                    cc1, cc2, cc3, cc4, cc5 = st.columns([1.5, 1.5, 2, 1.5, 1])
+                    u_limit = u_data.get("daily_limit", DEFAULT_DAILY_LIMIT)
+                    u_used = u_data.get("used_minutes", 0)
+                    
+                    cc1, cc2, cc3, cc4, cc5, cc6 = st.columns([1.5, 1.5, 1.5, 1.5, 1, 1])
                     cc1.text(u_id)
                     cc2.text(u_nick)
-                    new_nick_val = cc3.text_input("label", key=f"input_{u_id}", label_visibility="collapsed", placeholder="새 닉네임")
                     
-                    if cc4.button("변경", key=f"change_{u_id}"):
-                        if new_nick_val:
-                            users_ref.document(u_id).update({"nickname": new_nick_val})
-                            user_msgs = chat_ref.where("user_id", "==", u_id).stream()
-                            for msg in user_msgs: msg.reference.update({"name": new_nick_val})
-                            st.toast(f"변경 완료")
-                            time.sleep(1)
-                            st.rerun()
+                    # 사용량 표시 (빨간색이면 초과)
+                    usage_text = f"{int(u_used)} / {u_limit}분"
+                    if u_used > u_limit:
+                        cc3.error(usage_text)
+                    else:
+                        cc3.text(usage_text)
                     
-                    if cc5.button("삭제", key=f"ban_{u_id}", type="primary"):
+                    # [NEW] 시간 제한 설정
+                    new_limit = cc4.number_input("limit", min_value=1, value=u_limit, key=f"limit_{u_id}", label_visibility="collapsed")
+                    
+                    if cc5.button("저장", key=f"save_{u_id}"):
+                        users_ref.document(u_id).update({"daily_limit": new_limit})
+                        st.toast(f"{u_nick}님 제한시간: {new_limit}분으로 설정")
+                        time.sleep(1)
+                        st.rerun()
+                    
+                    if cc6.button("삭제", key=f"ban_{u_id}", type="primary"):
                         users_ref.document(u_id).delete()
                         st.toast("삭제 완료")
                         time.sleep(1)
@@ -235,14 +305,11 @@ else:
             st.subheader("실시간 모니터링")
             if st.button("🗑️ 채팅방 기록 전체 삭제 (초기화)", type="primary"):
                 docs = chat_ref.stream()
-                for doc in docs:
-                    doc.reference.delete()
-                st.success("모든 채팅 기록을 삭제했습니다.")
+                for doc in docs: doc.reference.delete()
+                st.success("삭제 완료")
                 time.sleep(1)
                 st.rerun()
-            
             st.divider()
-
             docs = chat_ref.order_by("timestamp", direction=firestore.Query.DESCENDING).stream()
             for doc in docs:
                 data = doc.to_dict()
@@ -251,21 +318,17 @@ else:
                 msg = data.get("message")
                 is_deleted = data.get("is_deleted", False)
                 time_str = format_time_kst(data.get("timestamp"))
-
                 with st.container(border=True):
                     mc1, mc2 = st.columns([8, 2])
                     with mc1:
-                        if is_deleted:
-                            st.caption(f"🚫 [삭제됨] {name}님이 삭제한 글")
-                        else:
+                        if is_deleted: st.caption(f"🚫 [삭제됨] {name}: {msg}")
+                        else: 
                             st.write(f"**{name}**: {msg}")
-                            st.caption(f"{time_str}")
+                            st.caption(time_str)
                     with mc2:
                         if not is_deleted:
                             if st.button("삭제", key=f"adm_del_{doc_id}", type="primary"):
-                                chat_ref.document(doc_id).update({
-                                    "is_deleted": True
-                                })
+                                chat_ref.document(doc_id).update({"is_deleted": True})
                                 st.rerun()
             st.divider()
             notice_msg = st.text_input("공지 내용")
@@ -283,22 +346,18 @@ else:
 
         with admin_tab4:
             st.subheader("⚙️ 시스템 설정")
-            
             st.markdown("### 1. 채팅방 얼리기")
-            lock_status = st.toggle("채팅방 얼리기 (사용자 입력 차단)", value=is_chat_locked)
+            lock_status = st.toggle("채팅방 얼리기", value=is_chat_locked)
             if lock_status != is_chat_locked:
                 system_ref.document("config").update({"is_locked": lock_status})
                 st.rerun()
-            
             st.divider()
-            
             st.markdown("### 2. 금칙어 관리")
-            st.caption("쉼표(,)로 구분해서 입력하세요.")
+            st.caption("쉼표(,)로 구분")
             new_banned_words = st.text_area("금칙어 목록", value=banned_words, height=150)
-            
             if st.button("금칙어 저장"):
                 system_ref.document("config").update({"banned_words": new_banned_words})
-                st.success("저장되었습니다.")
+                st.success("저장됨")
                 time.sleep(1)
                 st.rerun()
 
@@ -306,7 +365,19 @@ else:
     # [B-2] 일반 사용자 화면
     # ----------------------------------------------------
     else:
-        # 우측 상단 고정 버튼 (일반 사용자용)
+        # [NEW] 이용 시간 초과 체크
+        if not is_allowed:
+            st.error("⏳ 일일 이용 시간이 초과되었습니다.")
+            st.info(f"오늘은 {used_min}분을 사용하셨습니다. (제한: {limit_min}분)")
+            st.warning("내일 다시 접속해주세요!")
+            
+            # 로그아웃 버튼만 제공
+            if st.button("🚪 로그아웃"):
+                st.session_state.logged_in = False
+                st.rerun()
+            st.stop() # 코드 실행 중단
+
+        # 우측 상단 고정 버튼 (기존 코드 유지)
         components.html("""
             <script>
                 function fixButtonPosition() {
@@ -341,6 +412,10 @@ else:
         # 사이드바
         with st.sidebar:
             st.header(f"👤 {st.session_state.user_nickname}님")
+            
+            # [NEW] 남은 시간 표시
+            st.info(f"⏳ 오늘 사용: {used_min}분 / {limit_min}분")
+            
             with st.expander("닉네임 변경"):
                 change_nick = st.text_input("새 닉네임", value=st.session_state.user_nickname)
                 if st.button("저장"):
