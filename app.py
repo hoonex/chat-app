@@ -22,24 +22,22 @@ if not firebase_admin._apps:
 db = firestore.client()
 chat_ref = db.collection("global_chat")
 
-# --- 3. 사이드바 (로그인 및 설정) ---
+# --- 3. 사이드바 (계정 설정) ---
 with st.sidebar:
     st.header("👤 계정 설정")
     
-    # 1. 고유 ID 관리 (랜덤 생성 or 직접 입력)
-    # 세션에 ID가 없으면 새로 만듭니다.
+    # 1. 고유 ID 관리
     if "user_id" not in st.session_state:
         st.session_state.user_id = str(uuid.uuid4())
     
-    # [핵심 기능] ID 입력창 (기본값은 현재 ID)
-    # 사용자가 예전 ID를 여기에 붙여넣을 수 있습니다.
+    # ID 입력/확인 (복구용)
     input_id = st.text_input("고유 ID (복구용)", value=st.session_state.user_id)
     
-    # [핵심 기능] ID 변경 및 닉네임 복구 버튼
+    # [로그인] 버튼
     if st.button("🆔 이 ID로 로그인 (닉네임 복구)"):
-        st.session_state.user_id = input_id.strip() # 입력한 ID를 내 ID로 확정
+        st.session_state.user_id = input_id.strip()
         
-        # DB에서 이 ID로 쓴 가장 최근 메시지를 찾습니다.
+        # 닉네임 찾기
         recent_msg = chat_ref.where("user_id", "==", st.session_state.user_id)\
                              .order_by("timestamp", direction=firestore.Query.DESCENDING)\
                              .limit(1).stream()
@@ -50,11 +48,11 @@ with st.sidebar:
             
         if found_name:
             st.session_state.user_nickname = found_name
-            st.success(f"환영합니다! '{found_name}'님으로 복구되었습니다.")
+            st.success(f"'{found_name}'님 환영합니다!")
             time.sleep(1)
             st.rerun()
         else:
-            st.warning("이 ID로 작성된 대화 기록이 없습니다. (새 계정)")
+            st.warning("새로운 ID입니다.")
 
     st.divider()
 
@@ -62,17 +60,16 @@ with st.sidebar:
     if "user_nickname" not in st.session_state:
         st.session_state.user_nickname = "익명"
 
-    # 복구된 닉네임이 있으면 그게 뜨고, 아니면 입력 가능
     new_nickname = st.text_input("닉네임", value=st.session_state.user_nickname)
     if new_nickname != st.session_state.user_nickname:
         st.session_state.user_nickname = new_nickname
-        st.rerun() # 닉네임 바꾸면 즉시 반영
+        st.rerun()
 
     MY_NAME = st.session_state.user_nickname.strip()
     if not MY_NAME:
         MY_NAME = "익명"
     
-    st.info(f"현재 접속 ID: ...{st.session_state.user_id[-6:]}")
+    st.caption(f"ID: ...{st.session_state.user_id[-6:]}")
 
     st.divider()
     
@@ -109,20 +106,19 @@ for doc in docs:
     message_text = data.get("message", "")
     sender_id = data.get("user_id", "")
     
-    # 1. 고유 ID로 나/남 구분
+    # 1. 내 글 (오른쪽)
     if sender_id == st.session_state.user_id:
-        # ✅ 나 (오른쪽)
         with st.chat_message("user"):
             st.write(message_text)
+            
+    # 2. 남의 글 (왼쪽)
     else:
-        # 🔴 남 (왼쪽)
-        
-        # [수정 요청] 다시 '글자(initials)' 아이콘으로 변경
-        # 하지만 seed에 'ID'를 넣어서 색깔은 사람마다 고유하게 유지
+        # [수정 완료] '글자' 대신 '사람 아바타(avataaars)' 사용
+        # Seed에 ID를 넣어서, ID마다 고유한 얼굴과 색상을 생성합니다.
         seed_value = sender_id if sender_id else sender_name
         
-        # initials 스타일 사용
-        icon_url = f"https://api.dicebear.com/9.x/initials/svg?seed={seed_value}"
+        # avataaars: 다양한 사람 얼굴을 생성하는 스타일
+        icon_url = f"https://api.dicebear.com/9.x/avataaars/svg?seed={seed_value}"
         
         with st.chat_message(sender_name, avatar=icon_url):
             st.markdown(f"**{sender_name}**")
@@ -136,7 +132,7 @@ if prompt := st.chat_input("메시지 입력..."):
     chat_ref.add({
         "name": MY_NAME,
         "message": prompt,
-        "user_id": st.session_state.user_id, # 내 ID 저장
+        "user_id": st.session_state.user_id,
         "timestamp": firestore.SERVER_TIMESTAMP
     })
     st.rerun()
