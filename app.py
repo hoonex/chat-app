@@ -10,27 +10,18 @@ import base64
 # --- 1. 페이지 설정 ---
 st.set_page_config(page_title="실시간 채팅", page_icon="💬")
 
-# --- 2. 아바타 생성 함수 (외부 사이트 안 씀!) ---
+# --- 2. 아바타 생성 함수 ---
 def get_custom_avatar(user_id):
-    """
-    User ID를 넣으면 그 ID에 맞는 고유한 배경색을 가진 
-    '👤' 아이콘 이미지 주소(Data URL)를 만들어줍니다.
-    """
-    # 1. ID를 해시(암호화)해서 고유한 6자리 색상코드(Hex) 추출
     hash_object = hashlib.md5(user_id.encode())
     hex_dig = hash_object.hexdigest()
-    color_hex = hex_dig[:6] # 앞에서 6자리만 따서 색상으로 씀
-
-    # 2. SVG 이미지 코드 생성 (배경색 + 👤 이모지)
-    # rx="50"은 둥근 원을 의미합니다.
+    color_hex = hex_dig[:6] 
+    
     svg_code = f"""
     <svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100">
       <rect width="100" height="100" rx="50" fill="#{color_hex}" />
       <text x="50%" y="55%" dominant-baseline="central" text-anchor="middle" font-size="60" fill="white">👤</text>
     </svg>
     """
-    
-    # 3. 브라우저가 읽을 수 있게 Base64로 인코딩
     b64_svg = base64.b64encode(svg_code.encode("utf-8")).decode("utf-8")
     return f"data:image/svg+xml;base64,{b64_svg}"
 
@@ -51,24 +42,31 @@ chat_ref = db.collection("global_chat")
 with st.sidebar:
     st.header("👤 계정 설정")
     
-    # ID 생성 및 관리
     if "user_id" not in st.session_state:
         st.session_state.user_id = str(uuid.uuid4())
     
-    # ID 복구 기능
     input_id = st.text_input("고유 ID (복구용)", value=st.session_state.user_id)
     
+    # [수정된 부분] 에러가 나던 로그인 버튼 로직을 안전하게 변경
     if st.button("🆔 이 ID로 로그인"):
         st.session_state.user_id = input_id.strip()
         
-        # 닉네임 불러오기
-        recent_msg = chat_ref.where("user_id", "==", st.session_state.user_id)\
-                             .order_by("timestamp", direction=firestore.Query.DESCENDING)\
-                             .limit(1).stream()
+        # [해결책] DB에서는 order_by를 뺍니다. (인덱스 에러 방지)
+        # 그냥 해당 ID로 쓴 글을 다 가져온 뒤, 파이썬에서 최신순을 찾습니다.
+        docs = chat_ref.where("user_id", "==", st.session_state.user_id).stream()
         
         found_name = None
-        for doc in recent_msg:
-            found_name = doc.to_dict().get("name")
+        latest_time = None
+
+        # 파이썬 반복문으로 가장 최신 글의 닉네임을 찾음
+        for doc in docs:
+            data = doc.to_dict()
+            msg_time = data.get("timestamp")
+            
+            # 시간이 없거나(None), 더 최신이면 갱신
+            if latest_time is None or (msg_time and msg_time > latest_time):
+                latest_time = msg_time
+                found_name = data.get("name")
             
         if found_name:
             st.session_state.user_nickname = found_name
@@ -76,11 +74,10 @@ with st.sidebar:
             time.sleep(1)
             st.rerun()
         else:
-            st.warning("새로운 ID입니다.")
+            st.warning("이 ID로 작성된 대화가 없거나 찾을 수 없습니다.")
 
     st.divider()
 
-    # 닉네임 설정
     if "user_nickname" not in st.session_state:
         st.session_state.user_nickname = "익명"
 
@@ -96,7 +93,6 @@ with st.sidebar:
     st.caption(f"ID: ...{st.session_state.user_id[-6:]}")
     st.divider()
     
-    # 관리자 메뉴
     st.header("🛠 관리자 메뉴")
     admin_input = st.text_input("관리자 암호", type="password", key="admin_pwd")
     
@@ -119,6 +115,8 @@ with st.sidebar:
 # --- 5. 메인 채팅 화면 ---
 st.title("💬 정동고 익명 채팅방")
 
+# 전체 채팅 목록은 시간순 정렬이 필요하므로 그대로 둡니다. 
+# (단순 정렬만 하는 건 인덱스 없이도 잘 됩니다)
 docs = chat_ref.order_by("timestamp").stream()
 chat_exists = False
 
@@ -130,18 +128,11 @@ for doc in docs:
     message_text = data.get("message", "")
     sender_id = data.get("user_id", "")
     
-    # 1. 내 글 (오른쪽)
     if sender_id == st.session_state.user_id:
         with st.chat_message("user"):
             st.write(message_text)
-            
-    # 2. 남의 글 (왼쪽)
     else:
-        # [핵심] 우리가 만든 함수로 아바타 이미지 생성
-        # sender_id가 있으면 그걸로 색깔 만듦. 없으면(옛날글) 이름으로 만듦.
         seed = sender_id if sender_id else sender_name
-        
-        # 여기서 '👤 + 랜덤 배경색' 이미지가 만들어짐
         custom_icon_url = get_custom_avatar(seed)
         
         with st.chat_message(sender_name, avatar=custom_icon_url):
