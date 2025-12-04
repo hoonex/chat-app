@@ -24,7 +24,7 @@ def hash_password(password):
 def get_custom_avatar(user_id, specific_color=None):
     if user_id == "ADMIN_ACCOUNT":
         return "📢"
-    if user_id == "SYSTEM_ENTRY": # 시스템 입장 메시지는 아바타 없음
+    if user_id == "SYSTEM_ENTRY": 
         return ""
     
     if specific_color:
@@ -117,9 +117,9 @@ if not st.session_state.logged_in:
                         st.session_state.user_nickname = "관리자"
                         st.session_state.is_super_admin = True
                         
-                        # [추가] 관리자 입장 메시지
                         chat_ref.add({
                             "user_id": "SYSTEM_ENTRY",
+                            "related_user_id": "ADMIN_ACCOUNT", # [추가] 누구 입장인지 추적용
                             "name": "SYSTEM",
                             "message": "📢 관리자가 입장했습니다.",
                             "timestamp": firestore.SERVER_TIMESTAMP,
@@ -143,9 +143,10 @@ if not st.session_state.logged_in:
                         st.session_state.user_nickname = user_nick
                         st.session_state.is_super_admin = False
                         
-                        # [추가] 일반 유저 입장 메시지
+                        # [기능 2 구현부] 입장 시 ID를 숨겨둠 (나중에 닉변경시 찾기 위해)
                         chat_ref.add({
                             "user_id": "SYSTEM_ENTRY",
+                            "related_user_id": login_id, # [추가] 관련 유저 ID 저장
                             "name": "SYSTEM",
                             "message": f"👋 {user_nick}님이 입장했습니다.",
                             "timestamp": firestore.SERVER_TIMESTAMP,
@@ -175,9 +176,10 @@ if not st.session_state.logged_in:
             st.session_state.user_nickname = guest_nick
             st.session_state.is_super_admin = False
             
-            # [추가] 익명 유저 입장 메시지
+            # [기능 2 구현부]
             chat_ref.add({
                 "user_id": "SYSTEM_ENTRY",
+                "related_user_id": guest_id, # [추가]
                 "name": "SYSTEM",
                 "message": f"👋 {guest_nick}님이 입장했습니다.",
                 "timestamp": firestore.SERVER_TIMESTAMP,
@@ -202,12 +204,17 @@ if not st.session_state.logged_in:
                 st.error("비밀번호 조건을 확인해주세요.")
             elif users_ref.document(new_id).get().exists: st.error("이미 있는 아이디입니다.")
             else:
-                users_ref.document(new_id).set({
-                    "password": hash_password(new_pw),
-                    "nickname": new_nick,
-                    "last_login": firestore.SERVER_TIMESTAMP
-                })
-                st.success("가입 완료! 로그인해주세요.")
+                # [기능 1 구현부] 회원가입 시에도 닉네임 중복 체크
+                existing_nick = users_ref.where("nickname", "==", new_nick).limit(1).get()
+                if len(existing_nick) > 0:
+                    st.error("이미 사용 중인 닉네임입니다. 다른 이름을 써주세요.")
+                else:
+                    users_ref.document(new_id).set({
+                        "password": hash_password(new_pw),
+                        "nickname": new_nick,
+                        "last_login": firestore.SERVER_TIMESTAMP
+                    })
+                    st.success("가입 완료! 로그인해주세요.")
 
 # ==========================================
 # [B] 로그인 성공 후
@@ -294,11 +301,11 @@ else:
                 msg_color = data.get("color", "#000000")
 
                 with st.container(border=True):
-                    # 입장 메시지인 경우 다르게 표시
+                    # 입장 메시지인 경우
                     if msg_id == "SYSTEM_ENTRY":
                         st.caption(f"🔔 {msg} ({time_str})")
                         if st.button("알림삭제", key=f"adm_del_{doc_id}", type="primary"):
-                             chat_ref.document(doc_id).delete() # 알림은 그냥 삭제
+                             chat_ref.document(doc_id).delete()
                              st.rerun()
                     else:
                         mc1, mc2 = st.columns([8, 2])
@@ -382,28 +389,21 @@ else:
         with st.sidebar:
             st.header(f"👤 {st.session_state.user_nickname}님")
             
-            # --- [수정된 기능] 사이드바 색상 변경 시 모든 과거 기록도 변경 ---
+            # --- 사이드바 색상 변경 ---
             st.divider()
             st.subheader("🎨 프로필 색상")
-            
             chosen_color = st.color_picker("색상 선택", st.session_state.user_color)
             
             if chosen_color != st.session_state.user_color:
-                # 1. 세션 색상 변경
                 st.session_state.user_color = chosen_color
-                
-                # 2. Firestore에서 내 아이디로 쓴 모든 글 찾아서 색상 업데이트
-                # (주의: 채팅이 엄청 많으면 느릴 수 있으나 MAX_CHAT_MESSAGES=50이라 괜찮음)
                 my_docs = chat_ref.where("user_id", "==", st.session_state.user_id).stream()
                 for doc in my_docs:
                     doc.reference.update({"color": chosen_color})
-                
                 st.toast("🎨 모든 채팅 기록의 색상이 변경되었습니다!")
                 time.sleep(0.5)
                 st.rerun()
-                
             st.divider()
-            # ---------------------------------------------------------------
+            # --------------------------
                 
             with st.expander("닉네임 변경"):
                 if st.session_state.user_id.startswith("guest_"):
@@ -411,13 +411,31 @@ else:
                 else:
                     change_nick = st.text_input("새 닉네임", value=st.session_state.user_nickname)
                     if st.button("저장"):
-                        if change_nick != st.session_state.user_nickname:
-                            clean_nick = change_nick.strip()
-                            if clean_nick:
+                        clean_nick = change_nick.strip()
+                        if clean_nick and clean_nick != st.session_state.user_nickname:
+                            # [기능 1 구현부] 중복 체크
+                            check_dup = users_ref.where("nickname", "==", clean_nick).limit(1).get()
+                            if len(check_dup) > 0:
+                                st.error("⚠️ 이미 존재하는 닉네임입니다.")
+                            else:
+                                # 1. 내 정보 업데이트
                                 users_ref.document(st.session_state.user_id).update({"nickname": clean_nick})
+                                
+                                # 2. 내가 쓴 채팅 글 업데이트
                                 my_msgs = chat_ref.where("user_id", "==", st.session_state.user_id).stream()
                                 for msg in my_msgs: msg.reference.update({"name": clean_nick})
+                                
+                                # 3. [기능 2 구현부] "입장했습니다" 시스템 메시지도 찾아서 업데이트
+                                # related_user_id가 나인 시스템 메시지를 찾음
+                                sys_msgs = chat_ref.where("user_id", "==", "SYSTEM_ENTRY")\
+                                                   .where("related_user_id", "==", st.session_state.user_id)\
+                                                   .stream()
+                                for s_msg in sys_msgs:
+                                    s_msg.reference.update({"message": f"👋 {clean_nick}님이 입장했습니다."})
+
                                 st.session_state.user_nickname = clean_nick
+                                st.toast("닉네임 변경 완료! 입장 알림도 수정되었습니다.")
+                                time.sleep(1)
                                 st.rerun()
                                 
             if st.button("🚪 로그아웃"):
@@ -447,13 +465,12 @@ else:
             
             # --- [입장 메시지 처리] ---
             if msg_id == "SYSTEM_ENTRY":
-                # 시스템 입장 메시지는 가운데 정렬된 회색 텍스트로 표시
                 st.markdown(f"""
                 <div style='text-align:center; color:#888; font-size:0.8em; margin: 10px 0;'>
                     {msg_text} ({msg_time})
                 </div>
                 """, unsafe_allow_html=True)
-                continue # 아래 채팅 말풍선 로직 건너뜀
+                continue 
             # --------------------------
 
             if is_deleted:
