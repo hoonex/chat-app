@@ -7,11 +7,9 @@ import time
 # --- 1. 페이지 설정 ---
 st.set_page_config(page_title="실시간 채팅", page_icon="💬")
 
-# --- 2. Firebase 연결 (Secrets 사용) ---
-# 앱이 실행될 때 한 번만 연결
+# --- 2. Firebase 연결 ---
 if not firebase_admin._apps:
     try:
-        # Secrets에 저장된 Firebase 키 정보를 가져옴
         cred_info = dict(st.secrets["firebase_key"])
         cred = credentials.Certificate(cred_info)
         firebase_admin.initialize_app(cred)
@@ -20,47 +18,44 @@ if not firebase_admin._apps:
         st.stop()
 
 db = firestore.client()
-chat_ref = db.collection("global_chat") # 채팅방 이름
+chat_ref = db.collection("global_chat")
 
-# --- 3. 사이드바 (설정 & 관리자 메뉴) ---
+# --- 3. 사이드바 (설정) ---
 with st.sidebar:
     st.header("👤 내 정보")
-    # 사용자 이름 설정
+    
+    # [수정 1] 이름을 입력받을 때 공백 제거 (.strip())
+    # key를 지정해서 입력 값을 안전하게 잡습니다.
     if "username" not in st.session_state:
         st.session_state.username = "익명"
-    st.session_state.username = st.text_input("닉네임", st.session_state.username)
+        
+    input_name = st.text_input("닉네임", value=st.session_state.username)
+    # 입력된 이름의 앞뒤 공백을 자동으로 삭제해서 저장
+    st.session_state.username = input_name.strip()
     
-    st.divider() # 구분선
+    st.divider()
     
     st.header("🛠 관리자 메뉴")
-    # 관리자 암호 입력창 (비밀번호처럼 가려짐)
     admin_input = st.text_input("관리자 암호", type="password", key="admin_pwd")
     
-    # 채팅 기록 삭제 버튼
-    if st.button("🗑️ 채팅 기록 삭제 (초기화)"):
-        # Secrets에 저장된 'admin_password'와 입력한 암호 비교
+    if st.button("🗑️ 채팅 기록 삭제"):
         if "admin_password" in st.secrets and admin_input == st.secrets["admin_password"]:
-            with st.spinner("기록을 지우는 중입니다..."):
-                # DB의 모든 메시지 삭제
+            with st.spinner("청소 중..."):
                 docs = chat_ref.stream()
                 for doc in docs:
                     doc.reference.delete()
-                
-            st.success("채팅방이 깨끗하게 초기화되었습니다! ✨")
+            st.success("초기화 완료!")
             time.sleep(1)
-            st.rerun() # 화면 새로고침
+            st.rerun()
         else:
-            if "admin_password" not in st.secrets:
-                st.error("설정 오류: Secrets에 'admin_password'가 없습니다.")
-            else:
-                st.error("암호가 틀렸습니다! 🚫")
+            st.error("암호가 틀렸습니다!")
             
     st.divider()
     if st.button("🔄 새로고침"):
         st.rerun()
 
 # --- 4. 메인 채팅 화면 ---
-st.title("정동고 익명 채팅방")
+st.title("💬 정동고 익명 채팅방")
 
 # 메시지 가져오기
 docs = chat_ref.order_by("timestamp").stream()
@@ -73,28 +68,31 @@ for doc in docs:
     sender_name = data.get("name", "알 수 없음")
     message_text = data.get("message", "")
     
-    # 1. 내가 보낸 메시지 (오른쪽)
-    if sender_name == st.session_state.username:
-        # 내 건 그냥 'user' 아이콘(사람 모양) 쓰거나, 내 이름 넣어도 됨
-        with st.chat_message("user"): 
+    # [수정 2] 보낸 사람 이름도 혹시 모르니 공백 제거해서 비교
+    if sender_name.strip() == st.session_state.username:
+        # 🟢 나 (오른쪽)
+        with st.chat_message("user"):
             st.write(message_text)
-            
-    # 2. 남이 보낸 메시지 (왼쪽)
     else:
-        with st.chat_message(sender_name): 
+        # 🔴 남 (왼쪽) - 예쁜 아이콘 적용
+        icon_url = f"https://ui-avatars.com/api/?name={sender_name}&background=random&color=fff"
+        with st.chat_message(sender_name, avatar=icon_url):
             st.markdown(f"**{sender_name}**")
             st.write(message_text)
 
 if empty_check:
-    st.info("아직 대화 내용이 없습니다. 첫 메시지를 남겨보세요!")
+    st.info("첫 메시지를 남겨보세요!")
 
-# --- 5. 메시지 전송 로직 ---
-if prompt := st.chat_input("메시지를 입력하세요..."):
-    # DB에 저장
+# --- 5. 메시지 전송 ---
+if prompt := st.chat_input("메시지 입력..."):
+    # [수정 3] 메시지 보낼 때도 내 이름을 확실하게 공백 제거해서 보냄
+    current_name = st.session_state.username
+    if not current_name: # 이름이 비어있으면 '익명'으로 강제 설정
+        current_name = "익명"
+        
     chat_ref.add({
-        "name": st.session_state.username,
+        "name": current_name,
         "message": prompt,
         "timestamp": firestore.SERVER_TIMESTAMP
     })
-    # 전송 후 즉시 화면 갱신
     st.rerun()
