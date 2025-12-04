@@ -11,60 +11,89 @@ st.set_page_config(page_title="실시간 채팅", page_icon="💬")
 # 앱이 실행될 때 한 번만 연결
 if not firebase_admin._apps:
     try:
-        # st.secrets["firebase_key"]는 아까 설정한 TOML 내용을 딕셔너리로 가져옵니다.
+        # Secrets에 저장된 Firebase 키 정보를 가져옴
         cred_info = dict(st.secrets["firebase_key"])
         cred = credentials.Certificate(cred_info)
         firebase_admin.initialize_app(cred)
     except Exception as e:
-        st.error(f"Firebase 연결 에러: {e}")
+        st.error(f"🔥 Firebase 연결 실패: {e}")
         st.stop()
 
 db = firestore.client()
+chat_ref = db.collection("global_chat") # 채팅방 이름
 
-# --- 3. UI 및 사용자 이름 설정 ---
-st.title("💬 정동고1-6반 익명 채팅방")
-
-if "username" not in st.session_state:
-    st.session_state.username = "익명"
-
+# --- 3. 사이드바 (설정 & 관리자 메뉴) ---
 with st.sidebar:
-    st.header("설정")
+    st.header("👤 내 정보")
+    # 사용자 이름 설정
+    if "username" not in st.session_state:
+        st.session_state.username = "익명"
     st.session_state.username = st.text_input("닉네임", st.session_state.username)
+    
+    st.divider() # 구분선
+    
+    st.header("🛠 관리자 메뉴")
+    # 관리자 암호 입력창 (비밀번호처럼 가려짐)
+    admin_input = st.text_input("관리자 암호", type="password", key="admin_pwd")
+    
+    # 채팅 기록 삭제 버튼
+    if st.button("🗑️ 채팅 기록 삭제 (초기화)"):
+        # Secrets에 저장된 'admin_password'와 입력한 암호 비교
+        if "admin_password" in st.secrets and admin_input == st.secrets["admin_password"]:
+            with st.spinner("기록을 지우는 중입니다..."):
+                # DB의 모든 메시지 삭제
+                docs = chat_ref.stream()
+                for doc in docs:
+                    doc.reference.delete()
+                
+            st.success("채팅방이 깨끗하게 초기화되었습니다! ✨")
+            time.sleep(1)
+            st.rerun() # 화면 새로고침
+        else:
+            if "admin_password" not in st.secrets:
+                st.error("설정 오류: Secrets에 'admin_password'가 없습니다.")
+            else:
+                st.error("암호가 틀렸습니다! 🚫")
+            
+    st.divider()
     if st.button("🔄 새로고침"):
         st.rerun()
-    st.caption("※ 상대방 글을 보려면 새로고침을 누르세요.")
 
-# --- 4. 메시지 가져오기 ---
-# 채팅방 이름: 'global_chat' (없으면 자동 생성됨)
-chat_ref = db.collection("global_chat")
+# --- 4. 메인 채팅 화면 ---
+st.title("정동고 익명 채팅방")
 
-# 시간순으로 정렬해서 가져오기
+# 메시지 가져오기 (시간순 정렬)
 docs = chat_ref.order_by("timestamp").stream()
 
-# --- 5. 채팅 화면 그리기 ---
+empty_check = True # 메시지가 하나라도 있는지 체크
+
+# 채팅 메시지 그리기
 for doc in docs:
+    empty_check = False
     data = doc.to_dict()
     sender_name = data.get("name", "알 수 없음")
     message_text = data.get("message", "")
     
-    # 내가 보낸 건 오른쪽("user"), 남이 보낸 건 왼쪽("assistant")
+    # 내가 쓴 글은 오른쪽, 남이 쓴 글은 왼쪽
     if sender_name == st.session_state.username:
         with st.chat_message("user"):
-            st.write(f"{message_text}")
+            st.write(message_text)
     else:
         with st.chat_message("assistant"):
             st.markdown(f"**{sender_name}**")
             st.write(message_text)
 
-# --- 6. 메시지 전송 로직 ---
-# 화면 맨 아래 입력창
+# 메시지가 없을 때 안내 문구
+if empty_check:
+    st.info("아직 대화 내용이 없습니다. 첫 메시지를 남겨보세요!")
+
+# --- 5. 메시지 전송 로직 ---
 if prompt := st.chat_input("메시지를 입력하세요..."):
-    # 1. DB에 저장
+    # DB에 저장
     chat_ref.add({
         "name": st.session_state.username,
         "message": prompt,
         "timestamp": firestore.SERVER_TIMESTAMP
     })
-    
-    # 2. 화면 즉시 갱신 (내 메시지 바로 보이게)
+    # 전송 후 즉시 화면 갱신
     st.rerun()
