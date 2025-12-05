@@ -112,7 +112,7 @@ if "user_color" not in st.session_state: st.session_state.user_color = "#000000"
 # ==========================================
 if not st.session_state.logged_in:
     st.title("정동고 익명 채팅방 입장하기")
-    tab1, tab2 = st.tabs(["로그인", "회원가입(Bcrypt 암호화 적용)"])
+    tab1, tab2 = st.tabs(["로그인", "회원가입"])
     
     with tab1:
         st.subheader("로그인")
