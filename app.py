@@ -2,10 +2,11 @@ import streamlit as st
 import firebase_admin
 from firebase_admin import credentials, firestore
 import time
-import hashlib
+import hashlib # 아바타 생성용으로 필요
 import base64
 import re
 import uuid
+import bcrypt # [추가] 비밀번호 암호화용
 from datetime import datetime, timedelta, timezone
 import streamlit.components.v1 as components
 
@@ -17,8 +18,18 @@ MAX_CHAT_MESSAGES = 50
 KST = timezone(timedelta(hours=9))
 
 # --- 3. 유틸리티 함수들 ---
+
+# [변경] bcrypt를 이용한 비밀번호 해싱 (회원가입용)
 def hash_password(password):
-    return hashlib.sha256(password.encode()).hexdigest()
+    # Salt를 자동 생성하여 해싱, DB 저장을 위해 string으로 디코딩
+    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+
+# [추가] 비밀번호 검증 함수 (로그인용)
+def check_password(input_password, stored_hash):
+    try:
+        return bcrypt.checkpw(input_password.encode('utf-8'), stored_hash.encode('utf-8'))
+    except ValueError:
+        return False
 
 def get_custom_avatar(user_id, specific_color=None):
     if user_id == "ADMIN_ACCOUNT":
@@ -29,6 +40,7 @@ def get_custom_avatar(user_id, specific_color=None):
     if specific_color:
         color_hex = specific_color.replace("#", "")
     else:
+        # 아바타 색상은 여전히 MD5 해시 사용 (보안과 무관하므로 유지)
         hash_object = hashlib.md5(user_id.encode())
         hex_dig = hash_object.hexdigest()
         color_hex = hex_dig[:6]
@@ -122,7 +134,8 @@ if not st.session_state.logged_in:
                     else: st.error("관리자 비밀번호가 틀렸습니다.")
                 else:
                     doc = users_ref.document(login_id).get()
-                    if doc.exists and doc.to_dict()['password'] == hash_password(login_pw):
+                    # [변경] check_password 사용
+                    if doc.exists and check_password(login_pw, doc.to_dict()['password']):
                         users_ref.document(login_id).update({
                             "last_login": firestore.SERVER_TIMESTAMP
                         })
@@ -143,7 +156,7 @@ if not st.session_state.logged_in:
                         })
                         maintain_chat_history()
                         st.rerun()
-                    else: st.error("정보가 틀립니다.")
+                    else: st.error("아이디 또는 비밀번호가 틀립니다.")
 
         st.markdown("---")
         if st.button("🕵️ 익명으로 바로 입장하기", type="primary", use_container_width=True):
@@ -194,6 +207,7 @@ if not st.session_state.logged_in:
                 if len(existing_nick) > 0:
                     st.error("이미 사용 중인 닉네임입니다. 다른 이름을 써주세요.")
                 else:
+                    # [변경] hash_password (bcrypt 적용됨)
                     users_ref.document(new_id).set({
                         "password": hash_password(new_pw),
                         "nickname": new_nick,
@@ -205,13 +219,10 @@ if not st.session_state.logged_in:
 # [B] 로그인 성공 후
 # ==========================================
 else:
-    # --- [핵심 수정] 접속 유효성 검사 (추방 확인 로직) ---
-    # 관리자가 아닐 경우, 매번 페이지 로드 시 DB에 내 ID가 살아있는지 확인
+    # --- 접속 유효성 검사 (추방 확인 로직) ---
     if not st.session_state.is_super_admin:
-        # DB에서 내 문서 조회
         check_user = users_ref.document(st.session_state.user_id).get()
         if not check_user.exists:
-            # 문서가 없으면(추방당했거나 삭제됨) 강제 로그아웃
             st.error("🚫 관리자에 의해 추방되었거나 계정이 만료되었습니다.")
             st.session_state.logged_in = False
             time.sleep(2)
