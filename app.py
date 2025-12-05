@@ -112,7 +112,7 @@ if "user_color" not in st.session_state: st.session_state.user_color = "#000000"
 # ==========================================
 if not st.session_state.logged_in:
     st.title("정동고 익명 채팅방 입장하기")
-    tab1, tab2 = st.tabs(["로그인", "회원가입"])
+    tab1, tab2 = st.tabs(["로그인", "회원가입(Bcrypt 암호화 적용)"])
     
     with tab1:
         st.subheader("로그인")
@@ -192,7 +192,7 @@ if not st.session_state.logged_in:
             st.rerun()
 
     with tab2:
-        st.subheader("회원가입(Bcrypt 암호화 적용)")
+        st.subheader("회원가입")
         new_id = st.text_input("아이디", key="new_id")
         new_pw = st.text_input("비밀번호 (영문+숫자 4자 이상)", type="password", key="new_pw")
         new_nick = st.text_input("닉네임", key="new_nick")
