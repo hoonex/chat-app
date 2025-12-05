@@ -192,7 +192,7 @@ if not st.session_state.logged_in:
             st.rerun()
 
     with tab2:
-        st.subheader("회원가입")
+        st.subheader("회원가입(Bcrypt 암호화 적용)")
         new_id = st.text_input("아이디", key="new_id")
         new_pw = st.text_input("비밀번호 (영문+숫자 4자 이상)", type="password", key="new_pw")
         new_nick = st.text_input("닉네임", key="new_nick")
@@ -213,7 +213,7 @@ if not st.session_state.logged_in:
                         "nickname": new_nick,
                         "last_login": firestore.SERVER_TIMESTAMP
                     })
-                    st.success("가입 완료! 로그인해주세요.")
+                    st.success("가입 완료. 로그인해주세요.")
 
 # ==========================================
 # [B] 로그인 성공 후
