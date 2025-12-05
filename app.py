@@ -118,6 +118,7 @@ if not st.session_state.logged_in:
         st.subheader("로그인")
         login_id = st.text_input("아이디", key="login_id")
         login_pw = st.text_input("비밀번호", type="password", key="login_pw")
+        
         if st.button("로그인 하기"):
             if not login_id or not login_pw:
                 st.warning("입력해주세요.")
@@ -134,7 +135,6 @@ if not st.session_state.logged_in:
                     else: st.error("관리자 비밀번호가 틀렸습니다.")
                 else:
                     doc = users_ref.document(login_id).get()
-                    # [변경] check_password 사용
                     if doc.exists and check_password(login_pw, doc.to_dict()['password']):
                         users_ref.document(login_id).update({
                             "last_login": firestore.SERVER_TIMESTAMP
@@ -157,6 +157,9 @@ if not st.session_state.logged_in:
                         maintain_chat_history()
                         st.rerun()
                     else: st.error("아이디 또는 비밀번호가 틀립니다.")
+        
+        # [추가] 보안 문구 (작고 회색)
+        st.caption("🔒 모든 비밀번호는 Bcrypt 암호화 기술로 안전하게 보호됩니다.")
 
         st.markdown("---")
         if st.button("🕵️ 익명으로 바로 입장하기", type="primary", use_container_width=True):
@@ -192,10 +195,11 @@ if not st.session_state.logged_in:
             st.rerun()
 
     with tab2:
-        st.subheader("회원가입(Bcrypt 암호화 사용)")
+        st.subheader("회원가입")
         new_id = st.text_input("아이디", key="new_id")
         new_pw = st.text_input("비밀번호 (영문+숫자 4자 이상)", type="password", key="new_pw")
         new_nick = st.text_input("닉네임", key="new_nick")
+        
         if st.button("회원가입"):
             if new_id.lower() == "admin": st.error("이 아이디는 사용할 수 없습니다.")
             elif new_id.startswith("guest_"): st.error("guest_로 시작하는 아이디는 만들 수 없습니다.")
@@ -203,6 +207,20 @@ if not st.session_state.logged_in:
                 st.error("비밀번호 조건을 확인해주세요.")
             elif users_ref.document(new_id).get().exists: st.error("이미 있는 아이디입니다.")
             else:
+                existing_nick = users_ref.where("nickname", "==", new_nick).limit(1).get()
+                if len(existing_nick) > 0:
+                    st.error("이미 사용 중인 닉네임입니다. 다른 이름을 써주세요.")
+                else:
+                    users_ref.document(new_id).set({
+                        "password": hash_password(new_pw),
+                        "nickname": new_nick,
+                        "last_login": firestore.SERVER_TIMESTAMP
+                    })
+                    st.success("가입 완료! 로그인해주세요.")
+        
+        # [추가] 보안 문구 (작고 회색)
+        st.caption("🔒 회원가입 시 비밀번호는 Bcrypt로 강력하게 암호화되어 저장됩니다.")
+
                 existing_nick = users_ref.where("nickname", "==", new_nick).limit(1).get()
                 if len(existing_nick) > 0:
                     st.error("이미 사용 중인 닉네임입니다. 다른 이름을 써주세요.")
