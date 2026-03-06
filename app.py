@@ -63,7 +63,7 @@ def maintain_chat_history():
 def format_time_kst(timestamp):
     if not timestamp: return "-"
     dt_kst = timestamp.astimezone(KST)
-    return dt_kst.strftime("%p %I:%M").replace("AM", "오전").replace("PM", "오후")
+    return dt_kst.strftime("%Y-%m-%d %p %I:%M").replace("AM", "오전").replace("PM", "오후")
 
 def get_system_config():
     doc = system_ref.document("config").get()
